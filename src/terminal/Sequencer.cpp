@@ -19,6 +19,7 @@
 #include <terminal/SixelParser.h>
 #include <terminal/Screen.h>
 #include <terminal/logging.h>
+#include <terminal/primitives.h>
 
 #include <crispy/algorithm.h>
 #include <crispy/base64.h>
@@ -61,7 +62,6 @@ using std::stoi;
 using std::string;
 using std::stringstream;
 using std::unique_ptr;
-using std::u32string_view;
 using std::vector;
 
 using namespace std::string_view_literals;
@@ -70,6 +70,14 @@ namespace terminal {
 
 namespace // {{{ helpers
 {
+    template <typename T, typename U>
+    std::optional<crispy::boxed<T, U>> decr(std::optional<crispy::boxed<T, U>> v)
+    {
+        if (v.has_value())
+            --*v;
+        return v;
+    }
+
     /// @returns parsed tuple with OSC code and offset to first data parameter byte.
     pair<int, int> parseOSC(string const& _data)
     {
@@ -97,7 +105,7 @@ namespace // {{{ helpers
     //     if (_intermediate.size() != 1)
     //         return nullopt;
     //
-    //     char32_t const code = _intermediate[0];
+    //     char const code = _intermediate[0];
     //     switch (code)
     //     {
     //         case '(':
@@ -135,7 +143,7 @@ namespace impl // {{{ some command generator helpers
 		}
 	}
 
-    optional<DECMode> toDECMode(int _value)
+    optional<DECMode> toDECMode(unsigned _value)
     {
         switch (_value)
         {
@@ -739,7 +747,7 @@ namespace impl // {{{ some command generator helpers
         if (logicalLines != 0 && logicalLines != 1)
             return ApplyResult::Invalid;
 
-        auto const lineCount = _seq.param_or(1, *_screen.size().lines);
+        auto const lineCount = _seq.param_or(1, *_screen.pageSize().lines);
 
         _screen.eventListener().requestCaptureBuffer(lineCount, logicalLines);
 
@@ -818,7 +826,7 @@ namespace impl // {{{ some command generator helpers
             }
             return ApplyResult::Ok;
         }
-        else if (_seq.parameterCount() == 1)
+        else if (_seq.parameterCount() == 2 || _seq.parameterCount() == 1)
         {
             switch (_seq.param(0))
             {
@@ -927,31 +935,47 @@ void Sequencer::error(std::string_view const& _errorString)
     LOGSTORE(VTParserLog)("Parser error: {}", _errorString);
 }
 
-void Sequencer::print(char32_t _char)
+void Sequencer::print(char _char)
 {
-    precedingGraphicCharacter_ = _char;
+    unicode::ConvertResult const r = unicode::from_utf8(utf8DecoderState_, _char);
+    if (holds_alternative<unicode::Incomplete>(r))
+        return;
+
+    static constexpr char32_t ReplacementCharacter {0xFFFD};
+
     instructionCounter_++;
-    screen_.writeText(_char);
+    auto const codepoint = holds_alternative<unicode::Success>(r)
+                         ? get<unicode::Success>(r).value
+                         : ReplacementCharacter;
+    screen_.writeText(codepoint);
+    precedingGraphicCharacter_ = codepoint;
 }
 
 void Sequencer::print(string_view _chars)
 {
-    if (_chars.empty())
-        return;
+    assert(_chars.size() != 0);
 
-    precedingGraphicCharacter_ = _chars.back();
-    instructionCounter_ += _chars.size();
-    screen_.writeText(_chars);
+    if (utf8DecoderState_.expectedLength == 0)
+    {
+        instructionCounter_ += _chars.size();
+        screen_.writeText(_chars);
+        precedingGraphicCharacter_ = _chars.back();
+    }
+    else
+        for (char const ch: _chars)
+            print(ch);
 }
 
 void Sequencer::execute(char _controlCode)
 {
     executeControlFunction(_controlCode);
+    utf8DecoderState_ = {};
 }
 
 void Sequencer::clear()
 {
     sequence_.clear();
+    utf8DecoderState_ = {};
 }
 
 void Sequencer::collect(char _char)
@@ -989,7 +1013,7 @@ void Sequencer::param(char _char)
         case '7':
         case '8':
         case '9':
-            sequence_.parameters().back().back() = sequence_.parameters().back().back() * 10 + (_char - U'0');
+            sequence_.parameters().back().back() = sequence_.parameters().back().back() * 10 + (_char - '0');
             break;
     }
 }
@@ -1013,13 +1037,10 @@ void Sequencer::startOSC()
     sequence_.setCategory(FunctionCategory::OSC);
 }
 
-void Sequencer::putOSC(char32_t _char)
+void Sequencer::putOSC(char _char)
 {
-    uint8_t u8[4];
-    size_t const count = distance(u8, unicode::encoder<char>{}(_char, u8));
-    if (sequence_.intermediateCharacters().size() + count < Sequence::MaxOscLength)
-        for (size_t i = 0; i < count; ++i)
-            sequence_.intermediateCharacters().push_back(u8[i]);
+    if (sequence_.intermediateCharacters().size() + 1 < Sequence::MaxOscLength)
+        sequence_.intermediateCharacters().push_back(_char);
 }
 
 void Sequencer::dispatchOSC()
@@ -1028,7 +1049,7 @@ void Sequencer::dispatchOSC()
     sequence_.parameters().push_back({static_cast<Sequence::Parameter>(code)});
     sequence_.intermediateCharacters().erase(0, skipCount);
     handleSequence();
-    sequence_.clear();
+    clear();
 }
 
 void Sequencer::hook(char _finalChar)
@@ -1065,7 +1086,7 @@ void Sequencer::hook(char _finalChar)
     }
 }
 
-void Sequencer::put(char32_t _char)
+void Sequencer::put(char _char)
 {
     if (hookedParser_)
         hookedParser_->pass(_char);
@@ -1137,7 +1158,7 @@ unique_ptr<ParserExtension> Sequencer::hookSixel(Sequence const& _seq)
 unique_ptr<ParserExtension> Sequencer::hookSTP(Sequence const& /*_seq*/)
 {
     return make_unique<SimpleStringCollector>(
-        [this](u32string_view const& _data) {
+        [this](string_view const& _data) {
             screen_.eventListener().setTerminalProfile(unicode::convert_to<char>(_data));
         }
     );
@@ -1170,8 +1191,8 @@ unique_ptr<ParserExtension> Sequencer::hookXTGETTCAP(Sequence const& /*_seq*/)
     //           character).
 
     return make_unique<SimpleStringCollector>(
-        [this](u32string_view const& _data) {
-            auto const capsInHex = crispy::split(_data, U';');
+        [this](string_view const& _data) {
+            auto const capsInHex = crispy::split(_data, ';');
             for (auto hexCap: capsInHex)
             {
                 string const hexCap8 = unicode::convert_to<char>(hexCap);
@@ -1185,18 +1206,18 @@ unique_ptr<ParserExtension> Sequencer::hookXTGETTCAP(Sequence const& /*_seq*/)
 unique_ptr<ParserExtension> Sequencer::hookDECRQSS(Sequence const& /*_seq*/)
 {
     return make_unique<SimpleStringCollector>(
-        [this](u32string_view const& _data) {
-            auto const s = [](u32string_view const& _dataString) -> optional<RequestStatusString> {
-                auto const mappings = std::array<std::pair<u32string_view, RequestStatusString>, 9>{
-                    pair{U"m",   RequestStatusString::SGR},
-                    pair{U"\"p", RequestStatusString::DECSCL},
-                    pair{U" q",  RequestStatusString::DECSCUSR},
-                    pair{U"\"q", RequestStatusString::DECSCA},
-                    pair{U"r",   RequestStatusString::DECSTBM},
-                    pair{U"s",   RequestStatusString::DECSLRM},
-                    pair{U"t",   RequestStatusString::DECSLPP},
-                    pair{U"$|",  RequestStatusString::DECSCPP},
-                    pair{U"*|",  RequestStatusString::DECSNLS}
+        [this](string_view const& _data) {
+            auto const s = [](string_view _dataString) -> optional<RequestStatusString> {
+                auto const mappings = std::array<std::pair<string_view, RequestStatusString>, 9>{
+                    pair{"m",   RequestStatusString::SGR},
+                    pair{"\"p", RequestStatusString::DECSCL},
+                    pair{" q",  RequestStatusString::DECSCUSR},
+                    pair{"\"q", RequestStatusString::DECSCA},
+                    pair{"r",   RequestStatusString::DECSTBM},
+                    pair{"s",   RequestStatusString::DECSLRM},
+                    pair{"t",   RequestStatusString::DECSLPP},
+                    pair{"$|",  RequestStatusString::DECSCPP},
+                    pair{"*|",  RequestStatusString::DECSNLS}
                 };
                 for (auto const& mapping : mappings)
                     if (_dataString == mapping.first)
@@ -1214,6 +1235,11 @@ unique_ptr<ParserExtension> Sequencer::hookDECRQSS(Sequence const& /*_seq*/)
 
 void Sequencer::executeControlFunction(char _c0)
 {
+#if defined(LIBTERMINAL_LOG_TRACE)
+    if (VTParserTraceLog)
+        LOGSTORE(VTParserTraceLog)("C0 0x{:02X}", _c0);
+#endif
+
     instructionCounter_++;
     switch (_c0)
     {
@@ -1326,7 +1352,7 @@ ApplyResult Sequencer::apply(FunctionDefinition const& _function, Sequence const
         // CSI
         case ANSISYSSC: screen_.restoreCursor(); break;
         case CBT: screen_.cursorBackwardTab(TabStopCount(_seq.param_or(0, Sequence::Parameter{1}))); break;
-        case CHA: screen_.moveCursorToColumn(ColumnPosition(_seq.param_or(0, Sequence::Parameter{1}))); break;
+        case CHA: screen_.moveCursorToColumn(_seq.param_or<ColumnOffset>(0, ColumnOffset{1}) - 1); break;
         case CHT: screen_.cursorForwardTab(TabStopCount(_seq.param_or(0, Sequence::Parameter{1}))); break;
         case CNL: screen_.moveCursorToNextLine(LineCount(_seq.param_or(0, Sequence::Parameter{1}))); break;
         case CPL: screen_.moveCursorToPrevLine(LineCount(_seq.param_or(0, Sequence::Parameter{1}))); break;
@@ -1334,26 +1360,31 @@ ApplyResult Sequencer::apply(FunctionDefinition const& _function, Sequence const
         case CUB: screen_.moveCursorBackward(_seq.param_or<ColumnCount>(0, ColumnCount{1})); break;
         case CUD: screen_.moveCursorDown(_seq.param_or<LineCount>(0, LineCount{1})); break;
         case CUF: screen_.moveCursorForward(_seq.param_or<ColumnCount>(0, ColumnCount{1})); break;
-        case CUP: screen_.moveCursorTo(Coordinate{ _seq.param_or<int>(0, 1), _seq.param_or<int>(1, 1)}); break;
+        case CUP:
+            screen_.moveCursorTo(
+                LineOffset::cast_from(_seq.param_or<int>(0, 1) - 1),
+                ColumnOffset::cast_from(_seq.param_or<int>(1, 1) - 1)
+            );
+            break;
         case CUU: screen_.moveCursorUp(_seq.param_or<LineCount>(0, LineCount{1})); break;
         case DA1: screen_.sendDeviceAttributes(); break;
         case DA2: screen_.sendTerminalId(); break;
         case DA3: return ApplyResult::Unsupported;
-        case DCH: screen_.deleteCharacters(_seq.param_or<ColumnCount>(0, ColumnCount{1})); break;
+        case DCH: screen_.deleteCharacters(_seq.param_or<ColumnCount>(0, ColumnCount{0})); break;
         case DECCRA:
             {
                 // The coordinates of the rectangular area are affected by the setting of origin mode (DECOM).
                 // DECCRA is not affected by the page margins.
                 auto const origin = screen_.origin();
-                auto const top = _seq.param_or<int>(0, origin.row);
-                auto const left = _seq.param_or<int>(1, origin.column);
-                auto const bottom = _seq.param_or<int>(2, unbox<int>(screen_.size().lines));
-                auto const right = _seq.param_or<int>(3, unbox<int>(screen_.size().columns));
-                auto const page = _seq.param_or<int>(4, 0);
+                auto const top = _seq.param_or(0, *origin.line + 1) - 1;
+                auto const left = _seq.param_or(1, *origin.column + 1) - 1;
+                auto const bottom = _seq.param_or(2, *screen_.pageSize().lines) - 1;
+                auto const right = _seq.param_or(3, *screen_.pageSize().columns) - 1;
+                auto const page = _seq.param_or(4, 0);
 
-                auto const targetTop = _seq.param_or<int>(5, origin.row);
-                auto const targetLeft = _seq.param_or<int>(6, origin.column);
-                auto const targetPage = _seq.param_or<int>(7, 0);
+                auto const targetTop = _seq.param_or(5, *origin.line + 1) - 1;
+                auto const targetLeft = _seq.param_or(6, *origin.column + 1) - 1;
+                auto const targetPage = _seq.param_or(7, 0);
 
                 screen_.copyArea(top, left, bottom, right, page,
                                  targetTop, targetLeft, targetPage);
@@ -1363,13 +1394,13 @@ ApplyResult Sequencer::apply(FunctionDefinition const& _function, Sequence const
             {
                 // The coordinates of the rectangular area are affected by the setting of origin mode (DECOM).
                 auto const origin = screen_.origin();
-                auto const top = _seq.param_or(0, origin.row);
-                auto const left = _seq.param_or(1, origin.column);
+                auto const top = _seq.param_or(0, *origin.line + 1) - 1;
+                auto const left = _seq.param_or(1, *origin.column + 1) - 1;
 
                 // If the value of Pt, Pl, Pb, or Pr exceeds the width or height of the active page, then the value is treated as the width or height of that page.
-                auto const size = screen_.size();
-                auto const bottom = min(_seq.param_or<int>(2, unbox<int>(size.lines)), unbox<int>(size.lines));
-                auto const right = min(_seq.param_or<int>(3, unbox<int>(size.columns)), unbox<int>(size.columns));
+                auto const size = screen_.pageSize();
+                auto const bottom = min(_seq.param_or(2, unbox<int>(size.lines)), unbox<int>(size.lines)) - 1;
+                auto const right = min(_seq.param_or(3, unbox<int>(size.columns)), unbox<int>(size.columns)) - 1;
 
                 screen_.eraseArea(top, left, bottom, right);
             }
@@ -1379,19 +1410,19 @@ ApplyResult Sequencer::apply(FunctionDefinition const& _function, Sequence const
                 auto const ch = _seq.param_or(0, Sequence::Parameter{ 0 });
                 // The coordinates of the rectangular area are affected by the setting of origin mode (DECOM).
                 auto const origin = screen_.origin();
-                auto const top = _seq.param_or(0, origin.row);
+                auto const top = _seq.param_or(0, origin.line);
                 auto const left = _seq.param_or(1, origin.column);
 
                 // If the value of Pt, Pl, Pb, or Pr exceeds the width or height of the active page, then the value is treated as the width or height of that page.
-                auto const size = screen_.size();
-                auto const bottom = min(_seq.param_or(2, unbox<int>(size.lines)), unbox<int>(size.lines));
-                auto const right = min(_seq.param_or(3, unbox<int>(size.columns)), unbox<int>(size.columns));
+                auto const size = screen_.pageSize();
+                auto const bottom = min(_seq.param_or(2, *size.lines), *size.lines);
+                auto const right = min(_seq.param_or(3, *size.columns), *size.columns);
 
-                screen_.fillArea(ch, top, left, bottom, right);
+                screen_.fillArea(ch, *top, *left, bottom, right);
             }
             break;
-        case DECDC: screen_.deleteColumns(_seq.param_or<ColumnCount>(0, ColumnCount(1))); break;
-        case DECIC: screen_.insertColumns(_seq.param_or<ColumnCount>(0, ColumnCount(1))); break;
+        case DECDC: screen_.deleteColumns(_seq.param_or(0, ColumnCount(1))); break;
+        case DECIC: screen_.insertColumns(_seq.param_or(0, ColumnCount(1))); break;
         case DECRM:
             {
                 ApplyResult r = ApplyResult::Ok;
@@ -1424,9 +1455,15 @@ ApplyResult Sequencer::apply(FunctionDefinition const& _function, Sequence const
             else
                 return ApplyResult::Invalid;
         case DECSNLS:
-            screen_.resize(PageSize{screen_.size().lines, _seq.param<ColumnCount>(0)});
+            screen_.resize(PageSize{screen_.pageSize().lines, _seq.param<ColumnCount>(0)});
             return ApplyResult::Ok;
-        case DECSLRM: screen_.setLeftRightMargin(_seq.param_opt(0), _seq.param_opt(1)); break;
+        case DECSLRM:
+            {
+                auto l = decr(_seq.param_opt<ColumnOffset>(0));
+                auto r = decr(_seq.param_opt<ColumnOffset>(1));
+                screen_.setLeftRightMargin(l, r);
+            }
+            break;
         case DECSM:
             {
                 ApplyResult r = ApplyResult::Ok;
@@ -1437,30 +1474,31 @@ ApplyResult Sequencer::apply(FunctionDefinition const& _function, Sequence const
                 });
                 return r;
             }
-        case DECSTBM: screen_.setTopBottomMargin(_seq.param_opt(0), _seq.param_opt(1)); break;
+        case DECSTBM: screen_.setTopBottomMargin(decr(_seq.param_opt<LineOffset>(0)), decr(_seq.param_opt<LineOffset>(1))); break;
         case DECSTR: screen_.resetSoft(); break;
         case DECXCPR: screen_.reportExtendedCursorPosition(); break;
-        case DL: screen_.deleteLines(_seq.param_or<LineCount>(0, LineCount(1))); break;
-        case ECH: screen_.eraseCharacters(_seq.param_or<ColumnCount>(0, ColumnCount(1))); break;
+        case DL: screen_.deleteLines(_seq.param_or(0, LineCount(1))); break;
+        case ECH: screen_.eraseCharacters(_seq.param_or(0, ColumnCount(1))); break;
         case ED: return impl::ED(_seq, screen_);
         case EL: return impl::EL(_seq, screen_);
-        case HPA: screen_.moveCursorToColumn(_seq.param<ColumnPosition>(0)); break;
+        case HPA: screen_.moveCursorToColumn(_seq.param<ColumnOffset>(0) - 1); break;
         case HPR: screen_.moveCursorForward(_seq.param<ColumnCount>(0)); break;
         case HVP:
             screen_.moveCursorTo(Coordinate{
-                _seq.param_or<int>(0, 1),
-                _seq.param_or<int>(1, 1)
+                _seq.param_or(0, LineOffset(1)) - 1,
+                _seq.param_or(1, ColumnOffset(1)) - 1
             });
             break; // YES, it's like a CUP!
-        case ICH: screen_.insertCharacters(_seq.param_or<ColumnCount>(0, ColumnCount{1})); break;
-        case IL:  screen_.insertLines(_seq.param_or<LineCount>(0, LineCount{1})); break;
+        case ICH: screen_.insertCharacters(_seq.param_or(0, ColumnCount{1})); break;
+        case IL:  screen_.insertLines(_seq.param_or(0, LineCount{1})); break;
         case REP:
             if (precedingGraphicCharacter_)
             {
-                auto const requestedCount = _seq.param<int>(0);
-                auto const availableColumns = screen_.margin().horizontal.to - screen_.cursor().position.column + 1;
+                auto const requestedCount = _seq.param<size_t>(0);
+                auto const availableColumns =
+                    (screen_.margin().horizontal.to - screen_.cursor().position.column).as<size_t>();
                 auto const effectiveCount = min(requestedCount, availableColumns);
-                for (int i = 0; i < effectiveCount; i++)
+                for (size_t i = 0; i < effectiveCount; i++)
                     screen_.writeText(precedingGraphicCharacter_);
             }
             break;
@@ -1491,7 +1529,9 @@ ApplyResult Sequencer::apply(FunctionDefinition const& _function, Sequence const
             }
         case SU: screen_.scrollUp(_seq.param_or<LineCount>(0, LineCount(1))); break;
         case TBC: return impl::TBC(_seq, screen_);
-        case VPA: screen_.moveCursorToLine(_seq.param_or<LinePosition>(0, LinePosition{1})); break;
+        case VPA:
+            screen_.moveCursorToLine(_seq.param_or<LineOffset>(0, LineOffset{1}) - 1);
+            break;
         case WINMANIP: return impl::WINDOWMANIP(_seq, screen_);
         case DECMODERESTORE: return impl::restoreDECModes(_seq, screen_);
         case DECMODESAVE: return impl::saveDECModes(_seq, screen_);

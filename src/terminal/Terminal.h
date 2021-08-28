@@ -16,7 +16,6 @@
 #include <terminal/InputGenerator.h>
 #include <terminal/pty/Pty.h>
 #include <terminal/ScreenEvents.h>
-#include <terminal/Screen.h>
 #include <terminal/Selector.h>
 #include <terminal/Viewport.h>
 #include <terminal/RenderBuffer.h>
@@ -33,6 +32,8 @@
 #include <vector>
 
 namespace terminal {
+
+class Screen;
 
 /// Terminal API to manage input and output devices of a pseudo terminal, such as keyboard, mouse, and screen.
 ///
@@ -68,7 +69,7 @@ class Terminal : public ScreenEvents {
     Terminal(Pty& _pty,
              int _ptyReadBufferSize,
              Events& _eventListener,
-             std::optional<LineCount> _maxHistoryLineCount = std::nullopt,
+             LineCount _maxHistoryLineCount = LineCount(0),
              std::chrono::milliseconds _cursorBlinkInterval = std::chrono::milliseconds{500},
              std::chrono::steady_clock::time_point _now = std::chrono::steady_clock::now(),
              std::string const& _wordDelimiters = "",
@@ -82,6 +83,8 @@ class Terminal : public ScreenEvents {
     ~Terminal();
 
     void start();
+
+    void resetHard();
 
     void setRefreshRate(double _refreshRate);
 
@@ -113,18 +116,6 @@ class Terminal : public ScreenEvents {
     bool applicationCursorKeys() const noexcept { return inputGenerator_.applicationCursorKeys(); }
     bool applicationKeypad() const noexcept { return inputGenerator_.applicationKeypad(); }
     // }}}
-
-    // {{{ screen proxy
-    /// @returns absolute coordinate of @p _pos with scroll offset and applied.
-    Coordinate absoluteCoordinate(Coordinate const& _pos) const noexcept
-    {
-        // TODO: unit test case me BEFORE merge, yo !
-        auto const row = viewport_.absoluteScrollOffset().value_or(
-            boxed_cast<StaticScrollbackPosition>(screen_.historyLineCount())) +
-            StaticScrollbackPosition::cast_from(_pos.row - 1);
-        auto const col = _pos.column;
-        return Coordinate{unbox<int>(row), col};
-    }
 
     /// Writes a given VT-sequence to screen.
     void writeToScreen(std::string_view _text);
@@ -217,7 +208,7 @@ class Terminal : public ScreenEvents {
     /// Only access this when having the terminal object locked.
     Screen& screen() noexcept { return screen_; }
 
-    bool lineWrapped(int _lineNumber) const { return screen_.lineWrapped(_lineNumber); }
+    bool isLineWrapped(LineOffset _lineNumber) const noexcept { return screen_.isLineWrapped(_lineNumber); }
 
     Coordinate const& currentMousePosition() const noexcept { return currentMousePosition_; }
 
@@ -274,7 +265,7 @@ class Terminal : public ScreenEvents {
     bool isSelectionInProgress() const noexcept { return selector_ && selector_->state() != Selector::State::Complete; }
 
     /// Tests whether given absolute coordinate is covered by a current selection.
-    bool isSelectedAbsolute(Coordinate _coord) const noexcept
+    bool isSelected(Coordinate _coord) const noexcept
     {
         return selector_
             && selector_->state() != Selector::State::Waiting
@@ -310,9 +301,9 @@ class Terminal : public ScreenEvents {
     bool updateCursorHoveringState();
 
     template <typename Renderer, typename... RemainingPasses>
-    void renderPass(Renderer const& pass, RemainingPasses... remainingPasses) const
+    void renderPass(Renderer && pass, RemainingPasses... remainingPasses) const
     {
-        screen_.render(pass, viewport_.absoluteScrollOffset());
+        screen_.render(std::forward<Renderer>(pass), viewport_.scrollOffset());
 
         if constexpr (sizeof...(RemainingPasses) != 0)
             renderPass(std::forward<RemainingPasses>(remainingPasses)...);
@@ -346,7 +337,7 @@ class Terminal : public ScreenEvents {
     void useApplicationCursorKeys(bool _enabled) override;
     void hardReset() override;
     void discardImage(Image const&) override;
-    void markRegionDirty(LinePosition _line, ColumnPosition _column) override;
+    void markCellDirty(Coordinate _position) noexcept override;
     void synchronizedOutput(bool _enabled) override;
 
     // private data
@@ -379,7 +370,7 @@ class Terminal : public ScreenEvents {
     std::chrono::steady_clock::time_point lastClick_{};
     unsigned int speedClicks_ = 0;
 
-    terminal::Coordinate currentMousePosition_{0, 0}; // current mouse position
+    terminal::Coordinate currentMousePosition_{}; // current mouse position
     Modifier mouseProtocolBypassModifier_ = Modifier::Shift;
     bool respectMouseProtocol_ = true; // shift-click can disable that, button release sets it back to true
     bool leftMouseButtonPressed_ = false; // tracks left-mouse button pressed state (used for cell selection).

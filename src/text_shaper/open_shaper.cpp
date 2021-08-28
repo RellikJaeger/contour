@@ -955,7 +955,7 @@ optional<rasterized_glyph> open_shaper::rasterize(glyph_key _glyph, render_mode 
             return nullopt;
     }
 
-    Ensure(output.valid());
+    Ensures(output.valid());
 
     return output;
 }

@@ -8,7 +8,7 @@ set(3rdparty_libunicode_version "3c59a3a0eb0c57c3081d48ea77c22809ac7c2d6e" CACHE
 set(3rdparty_mimalloc_version "v2.0.2" CACHE STRING "mimalloc: release tag")
 set(3rdparty_range_v3_version "8f690283cc03146ad20514741cf69eafb325e974" CACHE STRING "range_v3: commit hash")
 set(3rdparty_yaml_cpp_version "1713859b054b0a7fd867a59905dfbb0d3f774d54" CACHE STRING "yaml-cpp: commit hash")
-set(3rdparty_termbenchpro_version "513cc8a7eb15b3b1a7940816944056d168d2c22a" CACHE STRING "termbench-pro: commit hash")
+set(3rdparty_termbenchpro_version "facbe619431f1bc897ef6a862f2269ca62ac9176" CACHE STRING "termbench-pro: commit hash")
 
 if(CONTOUR_TESTING OR CRISPY_TESTING OR LIBTERMINAL_TESTING)
   set(CATCH_BUILD_EXAMPLES OFF CACHE INTERNAL "")
@@ -68,7 +68,7 @@ CPMAddPackage(
   NAME termbenchpro
   VERSION ${3rdparty_termbenchpro_version}
   URL https://github.com/contour-terminal/termbench-pro/archive/${3rdparty_termbenchpro_version}.zip
-  URL_HASH SHA256=555d6dd4e3017e93cc3d6a0b0507e0e1a8eb4534d636ce6bf30ead2d8c0a9e0c
+  URL_HASH SHA256=a826e42ec83e5bf471407cb88a031f1157bdd5b8542e527e57f7a22c8e64ff73
   EXCLUDE_FROM_ALL YES
 )
 

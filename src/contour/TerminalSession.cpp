@@ -517,7 +517,7 @@ void TerminalSession::operator()(actions::ClearHistoryAndReset)
     auto const screenSize = terminal_.screenSize();
     auto const pixelSize = display_->pixelSize();
 
-    terminal_.screen().resetHard();
+    terminal_.resetHard();
     auto const tmpScreenSize = PageSize{
         screenSize.lines,
         screenSize.columns + ColumnCount(1)
@@ -557,22 +557,20 @@ void TerminalSession::operator()(actions::DecreaseOpacity)
 
 void TerminalSession::operator()(actions::FollowHyperlink)
 {
-    #if defined(LIBTERMINAL_HYPERLINKS)
     auto const _l = scoped_lock{terminal()};
     auto const currentMousePosition = terminal().currentMousePosition();
     auto const currentMousePositionRel = terminal::Coordinate{
-        currentMousePosition.row - terminal().viewport().relativeScrollOffset().as<int>(),
+        currentMousePosition.line + terminal().viewport().scrollOffset().as<LineOffset>(),
         currentMousePosition.column
     };
     if (terminal().screen().contains(currentMousePosition))
     {
-        if (auto hyperlink = terminal().screen().at(currentMousePositionRel).hyperlink(); hyperlink != nullptr)
+        if (auto hyperlink = terminal().screen().hyperlinkAt(currentMousePositionRel))
         {
             followHyperlink(*hyperlink);
             return;
         }
     }
-    #endif
 }
 
 void TerminalSession::operator()(actions::IncreaseFontSize)

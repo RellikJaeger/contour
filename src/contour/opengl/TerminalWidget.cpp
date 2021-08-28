@@ -525,7 +525,7 @@ void TerminalWidget::inputMethodEvent(QInputMethodEvent* _event)
 
 QVariant TerminalWidget::inputMethodQuery(Qt::InputMethodQuery _query) const
 {
-    const QPoint cursorPos = QPoint(); // TODO: cursorPosition();
+    const QPoint cursorPos = QPoint(); // TODO: realCursorPosition();
     switch (_query) {
     // TODO?: case Qt::ImCursorRectangle:
     // case Qt::ImMicroFocus:
@@ -592,7 +592,8 @@ void TerminalWidget::assertInitialized()
 
 void TerminalWidget::onScrollBarValueChanged(int _value)
 {
-    terminal().viewport().scrollToAbsolute(terminal::StaticScrollbackPosition::cast_from(_value));
+    fmt::print("TerminalWidget.onScrollBarValueChanged: {}\n", _value);
+    terminal().viewport().scrollTo(terminal::ScrollOffset::cast_from(_value));
     scheduleRedraw();
 }
 

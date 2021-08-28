@@ -39,7 +39,7 @@
 #include <QtWidgets/QHBoxLayout>
 
 #if defined(CONTOUR_SCROLLBAR)
-#include <QtWidgets/QScrollBar>
+#include <contour/ScrollableDisplay.h>
 #endif
 
 #include <atomic>
@@ -47,31 +47,6 @@
 #include <memory>
 
 namespace contour {
-
-#if defined(CONTOUR_SCROLLBAR)
-class ScrollableDisplay: public QWidget
-{
-    Q_OBJECT
-
-public:
-    ScrollableDisplay(QWidget* _parent, TerminalSession& _session, QWidget* _main);
-
-    QSize sizeHint() const override;
-    void resizeEvent(QResizeEvent* _event) override;
-
-    void showScrollBar(bool _show);
-    void updatePosition();
-
-public Q_SLOTS:
-    void updateValues();
-    void onValueChanged();
-
-private:
-    TerminalSession& session_;
-    QWidget* mainWidget_;
-    QScrollBar* scrollBar_;
-};
-#endif
 
 // XXX Maybe just now a main window and maybe later just a TerminalWindow.
 //

@@ -28,8 +28,8 @@ namespace crispy
 #undef Expects
 #endif
 
-#if defined(Ensure)
-#undef Ensure
+#if defined(Ensures)
+#undef Ensures
 #endif
 
 inline void check(bool _cond, std::string_view _text,
@@ -52,7 +52,7 @@ inline void check(bool _cond, std::string_view _text,
         ); \
     } while (0)
 
-#define Ensure(cond) \
+#define Ensures(cond) \
     do { \
         ::crispy::check( \
             (cond), #cond, \

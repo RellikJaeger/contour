@@ -26,28 +26,28 @@
 
 using namespace std;
 
-class NullParserEvents: public terminal::ParserEvents
+class NullParserEvents
 {
 public:
-    void error(std::string_view const& _errorString) override {}
-    void print(char32_t _text) override {}
-    void print(std::string_view _chars) override {}
-    void execute(char _controlCode) override {}
-    void clear() override {}
-    void collect(char _char) override {}
-    void collectLeader(char _leader) override {}
-    void param(char _char) override {}
-    void dispatchESC(char _function) override {}
-    void dispatchCSI(char _function) override {}
-    void startOSC() override {}
-    void putOSC(char32_t _char) override {}
-    void dispatchOSC() override {}
-    void hook(char _function) override {}
-    void put(char32_t _char) override {}
-    void unhook() override {}
-    void startAPC() override {}
-    void putAPC(char32_t) override {}
-    void dispatchAPC() override {}
+    void error(std::string_view const& _errorString) {}
+    void print(char _text) {}
+    void print(std::string_view _chars) {}
+    void execute(char _controlCode) {}
+    void clear() {}
+    void collect(char _char) {}
+    void collectLeader(char _leader) {}
+    void param(char _char) {}
+    void dispatchESC(char _function) {}
+    void dispatchCSI(char _function) {}
+    void startOSC() {}
+    void putOSC(char _char) {}
+    void dispatchOSC() {}
+    void hook(char _function) {}
+    void put(char _char) {}
+    void unhook() {}
+    void startAPC() {}
+    void putAPC(char) {}
+    void dispatchAPC() {}
 };
 
 template <typename Writer>
@@ -99,7 +99,7 @@ void benchmarkParserOnly()
 
 void benchmarkTerminal()
 {
-    auto const testSizeMB = 32;
+    auto const testSizeMB = 32; //64;
     auto pageSize = terminal::PageSize{terminal::LineCount(25), terminal::ColumnCount(80)};
     auto const ptyReadBufferSize = 8192;
     auto maxHistoryLineCount = terminal::LineCount(4096);
@@ -126,11 +126,16 @@ void benchmarkTerminal()
 
     cout << fmt::format("{:>12}: {}\n\n",
                         "history size",
-                        vt.screen().maxHistoryLineCount().value_or(terminal::LineCount(0)));
+                        vt.screen().maxHistoryLineCount());
 }
 
 int main(int argc, char const* argv[])
 {
+    fmt::print("Cell      : {} bytes\n", sizeof(terminal::Cell));
+    fmt::print("CellExtra : {} bytes\n", sizeof(terminal::CellExtra));
+    fmt::print("CellFlags : {} bytes\n", sizeof(terminal::CellFlags));
+    fmt::print("Color     : {} bytes\n", sizeof(terminal::Color));
+
     benchmarkTerminal();
     benchmarkParserOnly();
 

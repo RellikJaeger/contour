@@ -72,10 +72,9 @@ class Selector {
         constexpr int length() const noexcept { return toColumn - fromColumn + 1; }
     };
 
-
     enum class Mode { Linear, LinearWordWise, FullLine, Rectangular };
-	using GetCellAt = std::function<Cell const*(Coordinate)>;
-    using GetWrappedFlag = std::function<bool(int)>;
+	using GetCellAt = std::function<Cell const*(LineOffset, ColumnOffset)>;
+    using GetWrappedFlag = std::function<bool(LineOffset)>;
 
     Selector(Mode _mode,
 			 GetCellAt _at,
@@ -99,7 +98,12 @@ class Selector {
     ///
     /// @retval true TerminalView requires scrolling offset adjustments.
     /// @retval false TerminalView's scrolling offset does not need adjustments.
-    bool extend(Coordinate const& _to);
+    bool extend(Coordinate _to)
+    {
+        return extend(_to.line, _to.column);
+    }
+
+    bool extend(LineOffset _line, ColumnOffset _column);
 
     /// Marks the selection as completed.
     void stop();
@@ -113,14 +117,14 @@ class Selector {
         switch (mode_)
         {
             case Mode::FullLine:
-                return crispy::ascending(from_.row, _coord.row, to_.row)
-                    || crispy::ascending(to_.row, _coord.row, from_.row);
+                return crispy::ascending(from_.line, _coord.line, to_.line)
+                    || crispy::ascending(to_.line, _coord.line, from_.line);
             case Mode::Linear:
             case Mode::LinearWordWise:
                 return crispy::ascending(from_, _coord, to_)
                     || crispy::ascending(to_, _coord, from_);
             case Mode::Rectangular:
-                return crispy::ascending(from_.row, _coord.row, to_.row)
+                return crispy::ascending(from_.line, _coord.line, to_.line)
                     && crispy::ascending(from_.column, _coord.column, to_.column);
         }
         return false;
@@ -130,7 +134,7 @@ class Selector {
 
     /// Tests whether selection is upwards.
     constexpr bool negativeSelection() const noexcept { return to_ < from_; }
-    constexpr bool singleLineSelection() const noexcept { return from_.row == to_.row; }
+    constexpr bool singleLineSelection() const noexcept { return from_.line == to_.line; }
 
     constexpr void swapDirection() noexcept
     {
@@ -157,10 +161,17 @@ class Selector {
     template <typename Renderer>
     void render(Renderer&& _render) const
     {
-        for (auto const& range : selection())
-            for (auto const col : crispy::times(range.fromColumn, range.length()))
-                if (Cell const* cell = at({range.line, col}); cell != nullptr)
-                    _render(Coordinate{range.line, col}, *cell);
+        for (auto const& range: selection())
+        {
+            for (auto const col: crispy::times(range.fromColumn, range.length()))
+            {
+                auto line = LineOffset::cast_from(range.line);
+                auto column = ColumnOffset::cast_from(col);
+                Cell const* cell = at(line, column);
+                if (cell != nullptr)
+                    _render(Coordinate{line, column}, *cell);
+            }
+        }
     }
 
   private:
@@ -175,12 +186,21 @@ class Selector {
 		}
 	}
 
-	Cell const* at(Coordinate const& _pos) const { return getCellAt_(_pos); }
+	Cell const* at(Coordinate _coord) const noexcept
+    {
+        return getCellAt_(_coord.line, _coord.column);
+    }
+
+	Cell const* at(LineOffset _line, ColumnOffset _column) const noexcept
+    {
+        return getCellAt_(_line, _column);
+    }
 
 	void extendSelectionBackward();
 	void extendSelectionForward();
 
-  private:
+    // private fields
+    //
     State state_{State::Waiting};
 	Mode mode_;
 	GetCellAt getCellAt_;

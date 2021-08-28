@@ -248,8 +248,8 @@ void sendMouseMoveEvent(QMouseEvent* _event, TerminalSession& _session)
     auto constexpr MarginTop = 0;
     auto constexpr MarginLeft = 0;
     auto const cellSize = _session.display()->cellSize();
-    auto const row = int{1 + (max(_event->pos().y(), 0) - MarginTop) /  cellSize.height.as<int>()};
-    auto const col = int{1 + (max(_event->pos().x(), 0) - MarginLeft) / cellSize.width.as<int>()};
+    auto const row = terminal::LineOffset((max(_event->pos().y(), 0) - MarginTop) /  cellSize.height.as<int>());
+    auto const col = terminal::ColumnOffset((max(_event->pos().x(), 0) - MarginLeft) / cellSize.width.as<int>());
     auto const pos = terminal::Coordinate{row, col};
 
     _session.sendMouseMoveEvent(pos,

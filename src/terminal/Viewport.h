@@ -25,8 +25,9 @@ namespace terminal {
 
 // #define CONTOUR_LOG_VIEWPORT 1
 
-class Screen;
+template <typename EventListener> class Screen;
 
+template <typename T>
 class Viewport
 {
 public:
@@ -36,7 +37,7 @@ public:
 
     using ModifyEvent = std::function<void()>;
 
-    explicit Viewport(Screen& _screen, ModifyEvent _onModify = {}) :
+    explicit Viewport(Screen<T>& _screen, ModifyEvent _onModify = {}) :
         screen_{ _screen },
         modified_{ _onModify ? std::move(_onModify) : []() {} }
     {}
@@ -56,13 +57,13 @@ public:
     {
         auto const a = - scrollOffset_.as<int>();
         auto const b = _line.as<int>();
-        auto const c = screenLineCount().as<int>() - scrollOffset_.as<int>();
+        auto const c = unbox<int>(screenLineCount()) - scrollOffset_.as<int>();
         return a <= b && b < c;
     }
 
     bool scrollUp(LineCount _numLines)
     {
-        scrollOffset_ = std::min(scrollOffset_ + _numLines.as<ScrollOffset>(), historyLineCount().as<ScrollOffset>());
+        scrollOffset_ = std::min(scrollOffset_ + _numLines.as<ScrollOffset>(), boxed_cast<ScrollOffset>(historyLineCount()));
         return scrollTo(scrollOffset_);
     }
 
@@ -74,7 +75,7 @@ public:
 
     bool scrollToTop()
     {
-        return scrollTo(historyLineCount().as<ScrollOffset>());
+        return scrollTo(boxed_cast<ScrollOffset>(historyLineCount()));
     }
 
     bool scrollToBottom()
@@ -103,7 +104,10 @@ public:
         if (scrollingDisabled())
             return false;
 
-        if (0 <= *_offset && _offset <= historyLineCount().as<ScrollOffset>())
+        if (_offset == scrollOffset_)
+            return false;
+
+        if (0 <= *_offset && _offset <= boxed_cast<ScrollOffset>(historyLineCount()))
         {
             #if defined(CONTOUR_LOG_VIEWPORT)
             LOGSTORE(Log)("Scroll to offset {}", _offset);
@@ -121,9 +125,9 @@ public:
         if (scrollingDisabled())
             return false;
 
-        auto const newScrollOffset = screen_.findMarkerUpwards(scrollOffset_);
+        auto const newScrollOffset = screen_.findMarkerUpwards(-boxed_cast<LineOffset>(scrollOffset_));
         if (newScrollOffset.has_value())
-            return scrollTo(*newScrollOffset);
+            return scrollTo(boxed_cast<ScrollOffset>(-*newScrollOffset));
 
         return false;
     }
@@ -133,9 +137,9 @@ public:
         if (scrollingDisabled())
             return false;
 
-        auto const newScrollOffset = screen_.findMarkerDownwards(scrollOffset_);
+        auto const newScrollOffset = screen_.findMarkerDownwards(-boxed_cast<LineOffset>(scrollOffset_));
         if (newScrollOffset)
-            return scrollTo(*newScrollOffset);
+            return scrollTo(boxed_cast<ScrollOffset>(-*newScrollOffset));
         else
             return forceScrollToBottom();
 
@@ -154,7 +158,7 @@ public:
 
     // private fields
     //
-    Screen& screen_;
+    Screen<T>& screen_;
     ModifyEvent modified_;
     ScrollOffset scrollOffset_; //!< scroll offset relative to scroll top (0) or nullopt if not scrolled into history
 };

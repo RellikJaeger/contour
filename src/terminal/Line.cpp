@@ -95,24 +95,6 @@ std::string Line<Cell, Optimize>::toUtf8Trimmed() const
     return output;
 }
 
-template <typename Cell, bool Optimize>
-void Line<Cell, Optimize>::prepend(Buffer const& _cells)
-{
-    buffer_.insert(buffer_.begin(), _cells.begin(), _cells.end());
-}
-
-template <typename Cell, bool Optimize>
-void Line<Cell, Optimize>::append(Buffer const& _cells)
-{
-    buffer_.insert(buffer_.end(), _cells.begin(), _cells.end());
-}
-
-template <typename Cell, bool Optimize>
-void Line<Cell, Optimize>::append(int _count, Cell const& _initial)
-{
-    fill_n(back_inserter(buffer_), _count, _initial);
-}
-
 template class Line<Cell, true>;
 template class Line<Cell, false>;
 

@@ -38,15 +38,13 @@
 #include <QtWidgets/QTabWidget>
 #include <QtWidgets/QHBoxLayout>
 
-#if defined(CONTOUR_SCROLLBAR)
-#include <contour/ScrollableDisplay.h>
-#endif
-
 #include <atomic>
 #include <fstream>
 #include <memory>
 
 namespace contour {
+
+class ScrollableDisplay;
 
 // XXX Maybe just now a main window and maybe later just a TerminalWindow.
 //

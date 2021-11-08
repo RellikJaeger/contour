@@ -108,7 +108,6 @@ public:
     bool setFontSize(text::font_size _size) override;
     bool setScreenSize(terminal::PageSize _newScreenSize) override;
     void setMouseCursorShape(MouseCursorShape _shape) override;
-    void setTerminalProfile(config::TerminalProfile _profile) override;
     void setWindowTitle(std::string_view /*_title*/) override;
     void setWindowFullScreen() override;
     void setWindowMaximized() override;

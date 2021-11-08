@@ -97,7 +97,8 @@ TerminalSession::TerminalSession(unique_ptr<Pty> _pty,
         config_.ptyReadBufferSize,
         *this,
         config_.profile(profileName_)->maxHistoryLineCount,
-        {}, // TODO: that's actually dead param (_cursorBlinkInterval,)
+        config_.profile(profileName_)->copyLastMarkRangeOffset,
+        {}, // TODO(pr): that's actually dead param (_cursorBlinkInterval,)
         steady_clock::now(),
         config_.wordDelimiters, // TODO: move to profile!
         config_.bypassMouseProtocolModifier, // TODO: you too
@@ -864,10 +865,12 @@ void TerminalSession::configureTerminal()
 {
     auto const _l = scoped_lock{terminal_};
     LOGSTORE(SessionLog)("Configuring terminal.");
-    terminal::Screen& screen = terminal_.screen();
+    auto& screen = terminal_.screen();
 
     terminal_.setWordDelimiters(config_.wordDelimiters);
     terminal_.setMouseProtocolBypassModifier(config_.bypassMouseProtocolModifier);
+    terminal_.setMouseBlockSelectionModifier(config_.mouseBlockSelectionModifier);
+    terminal_.setLastMarkRangeOffset(profile_.copyLastMarkRangeOffset);
 
     LOGSTORE(SessionLog)("Setting terminal ID to {}.", profile_.terminalId);
     screen.setTerminalId(profile_.terminalId);

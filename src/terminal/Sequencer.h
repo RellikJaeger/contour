@@ -32,7 +32,7 @@
 
 namespace terminal {
 
-class Screen;
+template <typename EventListener> class Screen;
 
 // {{{ enums
 enum class ControlTransmissionMode
@@ -456,10 +456,11 @@ enum class ApplyResult {
 ///
 /// Sequencer implements the translation from VT parser events, forming a higher level Sequence,
 /// that can be matched against actions to perform on the target Screen.
-class Sequencer /*: public ParserEvents*/ {
+template <typename EventListener>
+class Sequencer {
   public:
     /// Constructs the sequencer stage.
-    Sequencer(Screen& _screen,
+    Sequencer(Screen<EventListener>& _screen,
               ImageSize _maxImageSize,
               RGBAColor _backgroundColor,
               std::shared_ptr<SixelColorPalette> _imageColorPalette);
@@ -509,7 +510,7 @@ class Sequencer /*: public ParserEvents*/ {
     // private data
     //
     Sequence sequence_{};
-    Screen& screen_;
+    Screen<EventListener>& screen_;
     char32_t precedingGraphicCharacter_ = {};
     uint64_t instructionCounter_ = 0;
     unicode::utf8_decoder_state utf8DecoderState_ = {};

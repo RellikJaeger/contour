@@ -131,6 +131,7 @@ struct TerminalProfile {
     bool maximized = false;
     bool fullscreen = false;
     double refreshRate = 0.0; // 0=auto
+    terminal::LineOffset copyLastMarkRangeOffset = terminal::LineOffset(0);
 
     std::string wmClass;
 
@@ -208,6 +209,7 @@ struct Config {
     std::string wordDelimiters;
     terminal::Modifier bypassMouseProtocolModifier = terminal::Modifier::Shift;
     SelectionAction onMouseSelection = SelectionAction::CopyToSelectionClipboard;
+    terminal::Modifier mouseBlockSelectionModifier = terminal::Modifier::Control;
 
     // input mapping
     InputMappings inputMappings;

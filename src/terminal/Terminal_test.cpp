@@ -28,6 +28,7 @@
 using namespace std;
 using terminal::PageSize;
 using terminal::LineCount;
+using terminal::LineOffset;
 using terminal::ColumnCount;
 
 namespace // {{{ helpers
@@ -91,6 +92,7 @@ namespace // {{{ helpers
                 1024,
                 *this,
                 LineCount(1024), // max history line count
+                LineOffset(0),
                 chrono::milliseconds(500), // cursor blink interval
                 chrono::steady_clock::time_point(), // initial time point
             }

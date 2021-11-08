@@ -341,6 +341,8 @@ public:
 
     Grid(): Grid(PageSize{LineCount(25), ColumnCount(80)}, false, LineCount(0)) {}
 
+    void reset();
+
     // {{{ grid global properties
     LineCount maxHistoryLineCount() const noexcept { return maxHistoryLineCount_; }
     void setMaxHistoryLineCount(LineCount _maxHistoryLineCount);
@@ -383,7 +385,7 @@ public:
 
     ColumnCount lineLength(LineOffset _line) const noexcept { return lineAt(_line).size(); }
     bool isLineBlank(LineOffset _line) const noexcept;
-    bool isLineWrapped(LineOffset _line) const noexcept { return lineAt(_line).wrapped(); }
+    bool isLineWrapped(LineOffset _line) const noexcept;
 
     int computeLogicalLineNumberFromBottom(LineCount _n) const noexcept;
 
@@ -431,10 +433,10 @@ public:
     /// @param _n number of lines to scroll up within the given margin.
     /// @param _defaultAttributes SGR attributes the newly created grid cells will be initialized with.
     /// @param _margin the margin coordinates to perform the scrolling action into.
-    void scrollUp(LineCount _n, GraphicsAttributes _defaultAttributes, Margin _margin) noexcept;
+    LineCount scrollUp(LineCount _n, GraphicsAttributes _defaultAttributes, Margin _margin) noexcept;
 
     /// Scrolls up main page by @p _n lines and re-initializes grid cells with @p _defaultAttributes.
-    void scrollUp(LineCount _n, GraphicsAttributes _defaultAttributes = {}) noexcept;
+    LineCount scrollUp(LineCount _n, GraphicsAttributes _defaultAttributes = {}) noexcept;
 
     /// Scrolls down by @p _n lines within the given margin.
     ///
@@ -529,6 +531,14 @@ template <typename Cell>
 constexpr LineCount Grid<Cell>::linesUsed() const noexcept
 {
     return linesUsed_;
+}
+
+template <typename Cell>
+bool Grid<Cell>::isLineWrapped(LineOffset _line) const noexcept
+{
+    return _line >= -boxed_cast<LineOffset>(historyLineCount())
+        && boxed_cast<LineCount>(_line) < pageSize_.lines
+        && lineAt(_line).wrapped();
 }
 
 template <typename Cell>

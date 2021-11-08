@@ -21,236 +21,18 @@ using namespace std;
 
 namespace terminal {
 
-Selector::Selector(Mode _mode,
-				   GetCellAt _getCellAt,
-                   GetWrappedFlag _wrappedFlag,
-				   std::u32string const& _wordDelimiters,
-				   LineCount _totalRowCount,
-				   ColumnCount _columnCount,
-				   Coordinate _from) :
-	mode_{_mode},
-	getCellAt_{move(_getCellAt)},
-    wrapped_{move(_wrappedFlag)},
-	wordDelimiters_{_wordDelimiters},
-	totalRowCount_{_totalRowCount},
-    columnCount_{_columnCount},
-	start_{_from},
-	from_{_from},
-	to_{_from}
+namespace // {{{ helper
 {
-	if (_mode == Mode::FullLine)
-	{
-		extend(from_.line, ColumnOffset(0));
-		swapDirection();
-		extend(from_.line, columnCount_.as<ColumnOffset>());
 
-        // backward
-        while (from_.line > LineOffset(0) && wrapped_(from_.line))
-            from_.line--;
-
-        // forward
-        while (*to_.line < *_totalRowCount && wrapped_(to_.line + 1))
-            to_.line++;
-	}
-	else if (isWordWiseSelection())
-	{
-        // TODO: expand logical line to complete word, if on line boundary
-		state_ = State::InProgress;
-		extendSelectionBackward();
-		swapDirection();
-		extendSelectionForward();
-	}
-}
-
-Selector::Selector(Mode _mode,
-                   std::u32string const& _wordDelimiters,
-                   Screen const& _screen,
-                   Coordinate _from) :
-    Selector{
-        _mode,
-        [screen = std::ref(_screen)](LineOffset _line, ColumnOffset _column) -> Cell const* {
-            auto const& buffer = screen.get();
-            return &buffer.at(_line, _column);
-        },
-        [screen = std::ref(_screen)](LineOffset _line) -> bool {
-            return screen.get().isLineWrapped(_line);
-        },
-        _wordDelimiters,
-        _screen.pageSize().lines + _screen.historyLineCount(),
-        _screen.pageSize().columns,
-        _from
-    }
+tuple<vector<Selection::Range>, Coordinate const, Coordinate const> prepare(Selection const& _selection)
 {
-}
-
-Coordinate Selector::stretchedColumn(Coordinate _coord) const noexcept
-{
-    Coordinate stretched = _coord;
-    if (Cell const* cell = at(_coord); cell && cell->width() > 1)
-    {
-        // wide character
-        stretched.column += ColumnOffset::cast_from(cell->width() - 1);
-        return stretched;
-    }
-
-    while (*stretched.column < *columnCount_)
-    {
-        if (Cell const* cell = at(stretched); cell)
-        {
-            if (cell->empty())
-                stretched.column++;
-            else
-            {
-                if (cell->width() > 1)
-                    stretched.column += ColumnOffset::cast_from(cell->width() - 1);
-                break;
-            }
-        }
-        else
-            break;
-    }
-
-    return stretched;
-}
-
-bool Selector::extend(LineOffset _line, ColumnOffset _column)
-{
-    assert(state_ != State::Complete && "In order extend a selection, the selector must be active (started).");
-
-    auto column = clamp(_column, ColumnOffset(0), columnCount_.as<ColumnOffset>());
-    auto const coord = Coordinate{_line, column};
-
-    state_ = State::InProgress;
-
-    switch (mode_)
-    {
-        case Mode::FullLine: // TODO(pr) something's broken with line-wise selection (tripple click), just try it, you'll get assert()
-            if (coord > start_)
-            {
-                to_ = coord;
-                while (*to_.line + 1 < *totalRowCount_ && wrapped_(to_.line + 1))
-                    to_.line++;
-            }
-            else if (coord < start_)
-            {
-                from_ = coord;
-                while (*from_.line > 0 && wrapped_(from_.line))
-                    from_.line--;
-            }
-            break;
-        case Mode::Linear:
-            to_ = stretchedColumn(coord);
-            break;
-        case Mode::LinearWordWise:
-            // TODO: handle logical line wraps
-        case Mode::Rectangular:
-            if (coord > start_)
-            {
-                to_ = coord;
-                extendSelectionForward();
-            }
-            else
-            {
-                to_ = coord;
-                extendSelectionBackward(); //TODO adapt
-                swapDirection();
-                to_ = start_;
-                extendSelectionForward();
-            }
-            break;
-    }
-
-    // TODO: indicates whether or not a scroll action must take place.
-    return false;
-}
-
-void Selector::extendSelectionBackward()
-{
-    auto const isWordDelimiterAt = [this](Coordinate const& _coord) -> bool {
-        Cell const* cell = at(_coord);
-        return !cell || cell->empty() || wordDelimiters_.find(cell->codepoint(0)) != wordDelimiters_.npos;
-    };
-
-    auto last = to_;
-    auto current = last;
-    for (;;) {
-        auto const wrapIntoPreviousLine = *current.column == 1 && *current.line > 0 && wrapped_(current.line);
-        if (*current.column > 1)
-            current.column--;
-        else if (*current.line > 0 || wrapIntoPreviousLine)
-        {
-            current.line--;
-            current.column = columnCount_.as<ColumnOffset>();
-        }
-        else
-            break;
-
-        if (isWordDelimiterAt(current))
-            break;
-        last = current;
-    }
-
-    if (to_ < from_)
-    {
-        swapDirection();
-		to_ = last;
-    }
-    else
-        to_ = last;
-}
-
-void Selector::extendSelectionForward()
-{
-    auto const isWordDelimiterAt = [this](Coordinate _coord) -> bool {
-        Cell const* cell = at(_coord);
-        return !cell || cell->empty() || wordDelimiters_.find(cell->codepoint(0)) != wordDelimiters_.npos;
-    };
-
-    auto last = to_;
-    auto current = last;
-    for (;;) {
-        if (*current.column == *columnCount_ && *current.line + 1 < *totalRowCount_ && wrapped_(current.line + 1))
-        {
-            current.line++;
-            current.column = ColumnOffset(0);
-            current = stretchedColumn({current.line, current.column + 1});
-        }
-
-        if (*current.column < *columnCount_)
-        {
-            current = stretchedColumn({current.line, current.column + 1});
-        }
-        else if (*current.line < *totalRowCount_)
-        {
-            current.line++;
-            current.column = ColumnOffset(0);
-        }
-        else
-            break;
-
-        if (isWordDelimiterAt(current))
-            break;
-        last = current;
-    }
-
-    to_ = stretchedColumn(last);
-}
-
-void Selector::stop()
-{
-    if (state_ == State::InProgress)
-        state_ = State::Complete;
-}
-
-tuple<vector<Selector::Range>, Coordinate const, Coordinate const> prepare(Selector const& _selector)
-{
-    vector<Selector::Range> result;
+    vector<Selection::Range> result;
 
     auto const [from, to] = [&]() {
-        if (_selector.to() < _selector.from())
-            return pair{_selector.to(), _selector.from()};
+        if (_selection.from() <= _selection.to())
+            return pair{_selection.from(), _selection.to()};
         else
-            return pair{_selector.from(), _selector.to()};
+            return pair{_selection.to(), _selection.from()};
     }();
 
     auto const numLines = to.line - from.line + 1;
@@ -259,82 +41,268 @@ tuple<vector<Selector::Range>, Coordinate const, Coordinate const> prepare(Selec
     return {move(result), from, to};
 }
 
-vector<Selector::Range> Selector::selection() const
+} // }}}
+
+// {{{ Selection
+void Selection::extend(Coordinate _to)
 {
-	switch (mode_)
-	{
-		case Mode::FullLine:
-			return lines();
-		case Mode::Linear:
-		case Mode::LinearWordWise:
-			return linear();
-		case Mode::Rectangular:
-			return rectangular();
-	}
-	return {};
+    assert(state_ != State::Complete && "In order extend a selection, the selector must be active (started).");
+    state_ = State::InProgress;
+    to_ = _to;
 }
 
-vector<Selector::Range> Selector::linear() const
+void Selection::complete()
+{
+    if (state_ == State::InProgress)
+        state_ = State::Complete;
+}
+
+Coordinate Selection::stretchedColumn(SelectionHelper const& _grid, Coordinate _coord) noexcept
+{
+    Coordinate stretched = _coord;
+    if (auto const w = _grid.cellWidth(_coord); w > 1) // wide character
+    {
+        stretched.column += ColumnOffset::cast_from(w - 1);
+        return stretched;
+    }
+
+    auto const pageWidth = _grid.pageSize().columns;
+    while (*stretched.column + 1 < *pageWidth)
+    {
+        if (_grid.cellEmpty(stretched))
+            stretched.column++;
+        else
+        {
+            if (auto const w = _grid.cellWidth(stretched); w > 1)
+                stretched.column += ColumnOffset::cast_from(w - 1);
+            break;
+        }
+    }
+
+    return stretched;
+}
+
+bool Selection::contains(Coordinate _coord) const noexcept
+{
+    return crispy::ascending(from_, _coord, to_)
+        || crispy::ascending(to_, _coord, from_);
+}
+
+bool Selection::intersects(Rect _area) const noexcept
+{
+    // TODO: make me more efficient
+    for (auto line = _area.top.as<LineOffset>(); line <= _area.bottom.as<LineOffset>(); ++line)
+        for (auto col = _area.left.as<ColumnOffset>(); col <= _area.right.as<ColumnOffset>(); ++col)
+            if (contains({line, col}))
+                return true;
+
+    return false;
+}
+
+std::vector<Selection::Range> Selection::ranges() const
 {
     auto [result, from, to] = prepare(*this);
+    auto const rightMargin = boxed_cast<ColumnOffset>(helper_.pageSize().columns - 1);
 
     switch (result.size())
     {
         case 1:
-            result[0] = Range{*from.line, *from.column, *to.column};
+            result[0] = Range{from.line, from.column, min(to.column, rightMargin)};
             break;
         case 2:
             // Render first line partial from selected column to end.
-            result[0] = Range{*from.line, *from.column, *columnCount_ - 1};
+            result[0] = Range{from.line, from.column, rightMargin};
             // Render last (second) line partial from beginning to last selected column.
-            result[1] = Range{*to.line, 0, *to.column};
+            result[1] = Range{to.line, ColumnOffset(0), min(to.column, rightMargin)};
             break;
         default:
             // Render first line partial from selected column to end.
-            result[0] = Range{*from.line, *from.column, *columnCount_ - 1};
+            result[0] = Range{from.line, from.column, rightMargin};
 
             // Render inner full.
             for (size_t n = 1; n < result.size(); ++n)
-                result[n] = Range{*from.line + static_cast<int>(n), 0, *columnCount_ - 1};
+                result[n] = Range{from.line + LineOffset::cast_from(n), ColumnOffset(0), rightMargin};
 
             // Render last (second) line partial from beginning to last selected column.
-            result[result.size() - 1] = Range{*to.line, 0, *to.column};
+            result[result.size() - 1] = Range{to.line, ColumnOffset(0), min(to.column, rightMargin)};
             break;
     }
 
     return result;
 }
+// }}}
+// {{{ LinearSelection
+LinearSelection::LinearSelection(SelectionHelper const& _helper, Coordinate _start):
+    Selection(_helper, _start)
+{
+}
+// }}}
+// {{{ WordWiseSelection
+WordWiseSelection::WordWiseSelection(SelectionHelper const& _helper, Coordinate _start):
+    Selection(_helper, _start)
+{
+    from_ = extendSelectionBackward(from_);
+    to_ = extendSelectionForward(to_);
+}
 
-vector<Selector::Range> Selector::lines() const
+Coordinate WordWiseSelection::extendSelectionBackward(Coordinate _pos) const noexcept
+{
+    auto last = _pos;
+    auto current = last;
+    for (;;) {
+        auto const wrapIntoPreviousLine = *current.column == 0 && *current.line > 0 && helper_.wrappedLine(current.line);
+        if (*current.column > 0)
+            current.column--;
+        else if (*current.line > 0 || wrapIntoPreviousLine)
+        {
+            current.line--;
+            current.column = boxed_cast<ColumnOffset>(helper_.pageSize().columns) - 1;
+        }
+        else
+            break;
+
+        if (helper_.wordDelimited(current))
+            break;
+        last = current;
+    }
+
+    return last;
+}
+
+Coordinate WordWiseSelection::extendSelectionForward(Coordinate _pos) const noexcept
+{
+    auto last = _pos;
+    auto current = last;
+    for (;;) {
+        if (*current.column == *helper_.pageSize().columns - 1 &&
+            *current.line + 1 < *helper_.pageSize().lines &&
+            helper_.wrappedLine(current.line))
+        {
+            current.line++;
+            current.column = ColumnOffset(0);
+            current = stretchedColumn(helper_, {current.line, current.column + 1});
+        }
+
+        if (*current.column + 1 < *helper_.pageSize().columns)
+        {
+            current = stretchedColumn(helper_, {current.line, current.column + 1});
+        }
+        else if (*current.line + 1 < *helper_.pageSize().lines)
+        {
+            current.line++;
+            current.column = ColumnOffset(0);
+        }
+        else
+            break;
+
+        if (helper_.wordDelimited(current))
+            break;
+        last = current;
+    }
+
+    return stretchedColumn(helper_, last);
+}
+
+void WordWiseSelection::extend(Coordinate _to)
+{
+    if (_to >= from_) // extending to the right
+    {
+        from_ = extendSelectionBackward(from_);
+        Selection::extend(extendSelectionForward(_to));
+    }
+    else // extending to the left
+    {
+        from_ = extendSelectionForward(from_);
+        Selection::extend(extendSelectionBackward(_to));
+    }
+}
+// }}}
+// {{{ RectangularSelection
+RectangularSelection::RectangularSelection(SelectionHelper const& _helper, Coordinate _start):
+    Selection(_helper, _start)
+{
+}
+
+bool RectangularSelection::contains(Coordinate _coord) const noexcept
+{
+    return crispy::ascending(from_.line, _coord.line, to_.line)
+        && crispy::ascending(from_.column, _coord.column, to_.column);
+}
+
+bool RectangularSelection::intersects(Rect _area) const noexcept
+{
+    auto const [from, to] = [this]() -> pair<Coordinate, Coordinate> {
+        if (from_ <= to_)
+            return pair{from_, to_};
+        else
+            return pair{to_, from_};
+    }();
+
+    // selection is above area
+    if (to.line < _area.top.as<LineOffset>())
+        return false;
+
+    // selection is below area
+    if (from.line > _area.bottom.as<LineOffset>())
+        return false;
+
+    // selection starts at area-top
+    if (from.line == _area.top.as<LineOffset>())
+        return _area.left.as<ColumnOffset>() <= from.column &&
+               from.column <= _area.right.as<ColumnOffset>();
+
+    // selection ends at area-top
+    if (to.line == _area.bottom.as<LineOffset>())
+        return _area.left.as<ColumnOffset>() <= to.column &&
+               to.column <= _area.right.as<ColumnOffset>();
+
+    // innser
+    return _area.top.as<LineOffset>() < from.line &&
+           to.line < _area.bottom.as<LineOffset>();
+}
+
+vector<Selection::Range> RectangularSelection::ranges() const
 {
     auto [result, from, to] = prepare(*this);
 
-    for (size_t line = 0; line < result.size(); ++line)
+    for (size_t i = 0; i < result.size(); ++i)
     {
-        result[line] = Range{
-            *from.line + static_cast<int>(line),
-            1,
-            *columnCount_
-        };
+        auto const line = from.line + LineOffset::cast_from(i);
+        auto const left = from.column;
+        auto const right= stretchedColumn(helper_, Coordinate{line, to.column}).column;
+        result[i] = Range{line, left, right};
     }
 
     return result;
 }
-
-vector<Selector::Range> Selector::rectangular() const
+// }}}
+// {{{ FullLineSelection
+FullLineSelection::FullLineSelection(SelectionHelper const& _helper, Coordinate _start):
+    Selection(_helper, _start)
 {
-    auto [result, from, to] = prepare(*this);
+    from_.column = ColumnOffset(0);
+    to_.column = boxed_cast<ColumnOffset>(helper_.pageSize().columns - 1);
+}
 
-    for (size_t line = 0; line < result.size(); ++line)
+void FullLineSelection::extend(Coordinate _to)
+{
+    if (_to >= from_)
     {
-        result[line] = Range{
-            *from.line + static_cast<int>(line),
-            *from.column,
-            *to.column
-        };
+        from_.column = ColumnOffset(0);
+        _to.column = boxed_cast<ColumnOffset>(helper_.pageSize().columns - 1);
+        while (helper_.wrappedLine(_to.line + 1))
+            ++_to.line;
+    }
+    else
+    {
+        from_.column = boxed_cast<ColumnOffset>(helper_.pageSize().columns - 1);
+        _to.column = ColumnOffset(0);
+        while (helper_.wrappedLine(_to.line))
+            --_to.line;
     }
 
-    return result;
+    Selection::extend(_to);
 }
+// }}}
 
 } // namespace terminal

@@ -1083,6 +1083,7 @@ TerminalProfile loadTerminalProfile(UsedKeys& _usedKeys,
     tryLoadChild(_usedKeys, _doc, basePath, "maximized", profile.maximized);
     tryLoadChild(_usedKeys, _doc, basePath, "fullscreen", profile.fullscreen);
     tryLoadChild(_usedKeys, _doc, basePath, "refresh_rate", profile.refreshRate);
+    tryLoadChild(_usedKeys, _doc, basePath, "copy_last_mark_range_offset", profile.copyLastMarkRangeOffset);
 
     tryLoadChild(_usedKeys, _doc, basePath, "wm_class", profile.wmClass);
 
@@ -1380,6 +1381,11 @@ void loadConfigFromFile(Config& _config, FileSystem::path const& _fileName)
                 "bypass_mouse_protocol_modifier",
                 doc["bypass_mouse_protocol_modifier"]); opt.has_value())
         _config.bypassMouseProtocolModifier = opt.value();
+
+    if (auto opt = parseModifier(usedKeys,
+                "mouse_block_selection_modifier",
+                doc["mouse_block_selection_modifier"]); opt.has_value())
+        _config.mouseBlockSelectionModifier = opt.value();
 
     if (doc["on_mouse_select"].IsDefined())
     {

@@ -357,16 +357,17 @@ namespace // {{{ helper
 }
 // }}}
 
-Screen::Screen(PageSize _size,
-               ScreenEvents& _eventListener,
-               bool _logRaw,
-               bool _logTrace,
-               LineCount _maxHistoryLineCount,
-               ImageSize _maxImageSize,
-               int _maxImageColorRegisters,
-               bool _sixelCursorConformance,
-               ColorPalette _colorPalette,
-               bool _allowReflowOnResize
+template <typename EventListener>
+Screen<EventListener>::Screen(PageSize _size,
+                              EventListener& _eventListener,
+                              bool _logRaw,
+                              bool _logTrace,
+                              LineCount _maxHistoryLineCount,
+                              ImageSize _maxImageSize,
+                              int _maxImageColorRegisters,
+                              bool _sixelCursorConformance,
+                              ColorPalette _colorPalette,
+                              bool _allowReflowOnResize
 ) :
     eventListener_{ _eventListener },
     logRaw_{ _logRaw },
@@ -414,7 +415,8 @@ Screen::Screen(PageSize _size,
 #endif
 }
 
-unsigned Screen::numericCapability(capabilities::Code _cap) const
+template <typename T>
+unsigned Screen<T>::numericCapability(capabilities::Code _cap) const
 {
     using namespace capabilities::literals;
 
@@ -428,12 +430,14 @@ unsigned Screen::numericCapability(capabilities::Code _cap) const
     }
 }
 
-void Screen::setMaxHistoryLineCount(LineCount _maxHistoryLineCount)
+template <typename T>
+void Screen<T>::setMaxHistoryLineCount(LineCount _maxHistoryLineCount)
 {
     primaryGrid().setMaxHistoryLineCount(_maxHistoryLineCount);
 }
 
-void Screen::resizeColumns(ColumnCount _newColumnCount, bool _clear)
+template <typename T>
+void Screen<T>::resizeColumns(ColumnCount _newColumnCount, bool _clear)
 {
     // DECCOLM / DECSCPP
     if (_clear)
@@ -457,7 +461,8 @@ void Screen::resizeColumns(ColumnCount _newColumnCount, bool _clear)
     eventListener_.resizeWindow(newSize);
 }
 
-void Screen::resize(PageSize _newSize)
+template <typename T>
+void Screen<T>::resize(PageSize _newSize)
 {
     // NOTE: This will only resize the currently active buffer.
     // Any other buffer will be resized when it is switched to.
@@ -476,7 +481,8 @@ void Screen::resize(PageSize _newSize)
     applyPageSizeToCurrentBuffer();
 }
 
-void Screen::applyPageSizeToCurrentBuffer()
+template <typename T>
+void Screen<T>::applyPageSizeToCurrentBuffer()
 {
     // Ensure correct screen buffer size for the buffer we've just switched to.
     cursor_.position = activeGrid_->resize(pageSize_, cursor_.position, wrapPending_);
@@ -499,7 +505,8 @@ void Screen::applyPageSizeToCurrentBuffer()
     verifyState();
 }
 
-void Screen::verifyState() const
+template <typename T>
+void Screen<T>::verifyState() const
 {
 #if !defined(NDEBUG)
     Expects(activeGrid_->pageSize() == pageSize_);
@@ -519,13 +526,15 @@ void Screen::verifyState() const
 #endif
 }
 
-void Screen::fail(std::string const& _message) const
+template <typename T>
+void Screen<T>::fail(std::string const& _message) const
 {
     dumpState(_message, std::cerr);
     abort();
 }
 
-void Screen::write(std::string_view _data)
+template <typename T>
+void Screen<T>::write(std::string_view _data)
 {
     if (_data.empty())
         return;
@@ -543,7 +552,8 @@ void Screen::write(std::string_view _data)
     eventListener_.screenUpdated();
 }
 
-void Screen::write(std::u32string_view _data)
+template <typename T>
+void Screen<T>::write(std::u32string_view _data)
 {
 #if defined(LIBTERMINAL_LOG_RAW)
     if (ScreenRawOutputLog)
@@ -558,7 +568,8 @@ void Screen::write(std::u32string_view _data)
     eventListener_.screenUpdated();
 }
 
-void Screen::writeText(string_view _chars)
+template <typename T>
+void Screen<T>::writeText(string_view _chars)
 {
     //#define LIBTERMINAL_BULK_TEXT_OPTIMIZATION 1
 
@@ -672,7 +683,7 @@ void Screen::writeText(string_view _chars)
             auto const* e = s + n;
             auto t = &useCurrentCell();
             for (; s != e; s++, t++)
-                t->write(cursor_.graphicsRendition, static_cast<char32_t>(*s), ASCII_Width, currentHyperlink_);
+                t->write(cursor_.graphicsRendition, static_cast<char32_t>(*s), ASCII_Width, cursor_.hyperlink);
             if (s + 1 != e)
                 (t - 1)->setCharacter(_chars.back(), 1);
             cursor_.position.column =
@@ -699,7 +710,8 @@ void Screen::writeText(string_view _chars)
         writeText(static_cast<char32_t>(ch));
 }
 
-void Screen::writeText(char32_t _char)
+template <typename T>
+void Screen<T>::writeText(char32_t _char)
 {
     #if defined(LIBTERMINAL_LOG_TRACE)
     if (VTParserTraceLog)
@@ -728,12 +740,14 @@ void Screen::writeText(char32_t _char)
         auto const extendedWidth = usePreviousCell().appendCharacter(codepoint);
         if (extendedWidth > 0)
             clearAndAdvance(extendedWidth);
+        eventListener_.markCellDirty(lastCursorPosition_);
     }
 
     sequencer_.resetInstructionCounter();
 }
 
-void Screen::writeCharToCurrentAndAdvance(char32_t _character) noexcept
+template <typename T>
+void Screen<T>::writeCharToCurrentAndAdvance(char32_t _character) noexcept
 {
     Line<Cell>& line = grid().lineAt(cursor_.position.line);
     Cell& cell = line.useCellAt(cursor_.position.column);
@@ -744,12 +758,9 @@ void Screen::writeCharToCurrentAndAdvance(char32_t _character) noexcept
         cell.reset();
     #endif
 
-    // cell.setCharacter(_character);
-    // cell.setAttributes(cursor_.graphicsRendition);
-    // cell.setHyperlink(currentHyperlink_); // TODO(pr) add this to cursor attrs!
     cell.write(cursor_.graphicsRendition,
                _character, unicode::width(_character),
-               currentHyperlink_);
+               cursor_.hyperlink);
 
     lastCursorPosition_ = cursor_.position;
 
@@ -769,7 +780,7 @@ void Screen::writeCharToCurrentAndAdvance(char32_t _character) noexcept
         cursor_.position.column++;
         for (int i = 1; i < n; ++i)
         {
-            currentCell().reset(cursor_.graphicsRendition, currentHyperlink_);
+            currentCell().reset(cursor_.graphicsRendition, cursor_.hyperlink);
             cursor_.position.column++;
         }
     }
@@ -785,7 +796,8 @@ void Screen::writeCharToCurrentAndAdvance(char32_t _character) noexcept
     eventListener_.markCellDirty(cursor_.position);
 }
 
-void Screen::clearAndAdvance(int _offset) noexcept
+template <typename T>
+void Screen<T>::clearAndAdvance(int _offset) noexcept
 {
     if (_offset == 0)
         return;
@@ -801,7 +813,7 @@ void Screen::clearAndAdvance(int _offset) noexcept
         cursor_.position.column++;
         for (int i = 1; i < n; ++i)
         {
-            useCurrentCell().reset(cursor_.graphicsRendition, currentHyperlink_);
+            useCurrentCell().reset(cursor_.graphicsRendition, cursor_.hyperlink);
             cursor_.position.column++;
         }
     }
@@ -811,12 +823,13 @@ void Screen::clearAndAdvance(int _offset) noexcept
     }
 }
 
-std::string Screen::screenshot(function<string(LineOffset)> const& _postLine) const
+template <typename T>
+std::string Screen<T>::screenshot(function<string(LineOffset)> const& _postLine) const
 {
     auto result = std::stringstream{};
     auto writer = VTWriter(result);
 
-    for (int const line: ranges::views::iota(-historyLineCount().as<int>(), *pageSize_.lines))
+    for (int const line: ranges::views::iota(-unbox<int>(historyLineCount()), *pageSize_.lines))
     {
         for (int const col: ranges::views::iota(0, *pageSize_.columns))
         {
@@ -849,48 +862,52 @@ std::string Screen::screenshot(function<string(LineOffset)> const& _postLine) co
     return result.str();
 }
 
-optional<ScrollOffset> Screen::findMarkerUpwards(ScrollOffset _currentScrollOffset) const
+template <typename T>
+optional<LineOffset> Screen<T>::findMarkerUpwards(LineOffset _startLine) const
 {
-    // XXX _currentScrollOffset is an absolute history line coordinate
-    if (*_currentScrollOffset < 0 || isAlternateScreen())
+    // XXX _startLine is an absolute history line coordinate
+    if (isAlternateScreen())
         return nullopt;
-    if (*_currentScrollOffset >= *historyLineCount())
+    if (*_startLine <= -*historyLineCount())
         return nullopt;
 
-    for (LineOffset i = -_currentScrollOffset.as<LineOffset>() - 1; i >= -historyLineCount().as<LineOffset>(); --i)
+    _startLine = min(_startLine, boxed_cast<LineOffset>(pageSize_.lines - 1));
+
+    for (LineOffset i = _startLine - 1; i >= -boxed_cast<LineOffset>(historyLineCount()); --i)
         if (grid().lineAt(i).marked())
-            return {-i.as<ScrollOffset>()};
+            return {i};
 
     return nullopt;
 }
 
-optional<ScrollOffset> Screen::findMarkerDownwards(ScrollOffset _currentScrollOffset) const
+template <typename T>
+optional<LineOffset> Screen<T>::findMarkerDownwards(LineOffset _lineOffset) const
 {
-    if (!isPrimaryScreen() || *_currentScrollOffset <= 0)
+    if (!isPrimaryScreen())
         return nullopt;
 
     auto const top =
-        *_currentScrollOffset < *historyLineCount()
-            ? -_currentScrollOffset.as<LineOffset>()
-            : -historyLineCount().as<LineOffset>()
-            ;
+        std::clamp(_lineOffset, -boxed_cast<LineOffset>(historyLineCount()),
+                                +boxed_cast<LineOffset>(pageSize_.lines) - 1);
 
     auto const bottom = LineOffset(0);
 
     for (LineOffset i = top + 1; i <= bottom; ++i)
         if (grid().lineAt(i).marked())
-            return {-i.as<ScrollOffset>()};
+            return {i};
 
     return nullopt;
 }
 
 // {{{ tabs related
-void Screen::clearAllTabs()
+template <typename T>
+void Screen<T>::clearAllTabs()
 {
     tabs_.clear();
 }
 
-void Screen::clearTabUnderCursor()
+template <typename T>
+void Screen<T>::clearTabUnderCursor()
 {
     // populate tabs vector in case of default tabWidth is used (until now).
     if (tabs_.empty() && *tabWidth_ != 0)
@@ -908,7 +925,8 @@ void Screen::clearTabUnderCursor()
     }
 }
 
-void Screen::setTabUnderCursor()
+template <typename T>
+void Screen<T>::setTabUnderCursor()
 {
     tabs_.emplace_back(realCursorPosition().column);
     sort(begin(tabs_), end(tabs_));
@@ -916,13 +934,15 @@ void Screen::setTabUnderCursor()
 // }}}
 
 // {{{ others
-void Screen::saveCursor()
+template <typename T>
+void Screen<T>::saveCursor()
 {
     // https://vt100.net/docs/vt510-rm/DECSC.html
     savedCursor_ = cursor_;
 }
 
-void Screen::restoreCursor()
+template <typename T>
+void Screen<T>::restoreCursor()
 {
     // https://vt100.net/docs/vt510-rm/DECRC.html
     restoreCursor(savedCursor_);
@@ -931,7 +951,8 @@ void Screen::restoreCursor()
     setMode(DECMode::Origin, savedCursor_.originMode);
 }
 
-void Screen::restoreCursor(Cursor const& _savedCursor)
+template <typename T>
+void Screen<T>::restoreCursor(Cursor const& _savedCursor)
 {
     wrapPending_ = false;
     cursor_ = _savedCursor;
@@ -939,7 +960,8 @@ void Screen::restoreCursor(Cursor const& _savedCursor)
     verifyState();
 }
 
-void Screen::resetSoft()
+template <typename T>
+void Screen<T>::resetSoft()
 {
     // https://vt100.net/docs/vt510-rm/DECSTR.html
     setMode(DECMode::BatchedRendering, false);
@@ -955,7 +977,7 @@ void Screen::resetSoft()
     setTopBottomMargin({}, pageSize_.lines.as<LineOffset>() - LineOffset(1)); // DECSTBM
     setLeftRightMargin({}, pageSize_.columns.as<ColumnOffset>() - ColumnOffset(1)); // DECRLM
 
-    currentHyperlink_ = {};
+    cursor_.hyperlink = {};
     colorPalette_ = defaultColorPalette_;
 
     // TODO: DECNKM (Numeric keypad)
@@ -968,7 +990,8 @@ void Screen::resetSoft()
     // TODO: DECPCTERM (PCTerm mode)
 }
 
-void Screen::resetHard()
+template <typename T>
+void Screen<T>::resetHard()
 {
     setBuffer(ScreenType::Main);
 
@@ -978,25 +1001,27 @@ void Screen::resetHard()
 
     clearAllTabs();
 
-    grids_ = emptyGrids(pageSize_, allowReflowOnResize_, primaryGrid().maxHistoryLineCount());
-    activeGrid_ = &primaryGrid();
+    for (auto& grid: grids_)
+        grid.reset();
 
     cursor_ = {};
 
     lastCursorPosition_ = cursor_.position;
 
     margin_ = Margin{
-        Margin::Vertical{{}, pageSize_.lines.as<LineOffset>()},
-        Margin::Horizontal{{}, pageSize_.columns.as<ColumnOffset>()}
+        Margin::Vertical{{}, pageSize_.lines.as<LineOffset>() - 1},
+        Margin::Horizontal{{}, pageSize_.columns.as<ColumnOffset>() - 1}
     };
 
-    currentHyperlink_ = {};
     colorPalette_ = defaultColorPalette_;
+
+    verifyState();
 
     eventListener_.hardReset();
 }
 
-void Screen::moveCursorTo(LineOffset _line, ColumnOffset _column)
+template <typename T>
+void Screen<T>::moveCursorTo(LineOffset _line, ColumnOffset _column)
 {
     auto const [line, column] = [&]()
     {
@@ -1011,40 +1036,42 @@ void Screen::moveCursorTo(LineOffset _line, ColumnOffset _column)
     cursor_.position.column = clampedColumn(column);
 }
 
-void Screen::setBuffer(ScreenType _type)
+template <typename T>
+void Screen<T>::setBuffer(ScreenType _type)
 {
-    if (bufferType() != _type)
+    if (bufferType() == _type)
+        return;
+
+    switch (_type)
     {
-        switch (_type)
-        {
-            case ScreenType::Main:
-                eventListener_.setMouseWheelMode(InputGenerator::MouseWheelMode::Default);
-                activeGrid_ = &primaryGrid();
-                break;
-            case ScreenType::Alternate:
-                if (isModeEnabled(DECMode::MouseAlternateScroll))
-                    eventListener_.setMouseWheelMode(InputGenerator::MouseWheelMode::ApplicationCursorKeys);
-                else
-                    eventListener_.setMouseWheelMode(InputGenerator::MouseWheelMode::NormalCursorKeys);
-                activeGrid_ = &alternateGrid();
-                break;
-        }
-        screenType_ = _type;
-
-        // Reset wrapPending-flag when switching buffer.
-        wrapPending_ = false;
-
-        // Reset last-cursor position.
-        lastCursorPosition_ = cursor_.position;
-
-        // Ensure correct screen buffer size for the buffer we've just switched to.
-        applyPageSizeToCurrentBuffer();
-
-        eventListener_.bufferChanged(_type);
+        case ScreenType::Main:
+            eventListener_.setMouseWheelMode(InputGenerator::MouseWheelMode::Default);
+            activeGrid_ = &primaryGrid();
+            break;
+        case ScreenType::Alternate:
+            if (isModeEnabled(DECMode::MouseAlternateScroll))
+                eventListener_.setMouseWheelMode(InputGenerator::MouseWheelMode::ApplicationCursorKeys);
+            else
+                eventListener_.setMouseWheelMode(InputGenerator::MouseWheelMode::NormalCursorKeys);
+            activeGrid_ = &alternateGrid();
+            break;
     }
+    screenType_ = _type;
+
+    // Reset wrapPending-flag when switching buffer.
+    wrapPending_ = false;
+
+    // Reset last-cursor position.
+    lastCursorPosition_ = cursor_.position;
+
+    // Ensure correct screen buffer size for the buffer we've just switched to.
+    applyPageSizeToCurrentBuffer();
+
+    eventListener_.bufferChanged(_type);
 }
 
-void Screen::linefeed(ColumnOffset _newColumn)
+template <typename T>
+void Screen<T>::linefeed(ColumnOffset _newColumn)
 {
     wrapPending_ = false;
     cursor_.position.column = _newColumn;
@@ -1057,7 +1084,7 @@ void Screen::linefeed(ColumnOffset _newColumn)
         // and make sure the subsequent text write will
         // possibly also reset remaining grid cells in that line
         // if the incoming text did not write to the full line
-        activeGrid_->scrollUp(LineCount(1), {}, margin_);
+        scrollUp(LineCount(1), {}, margin_);
     }
     else
     {
@@ -1069,17 +1096,27 @@ void Screen::linefeed(ColumnOffset _newColumn)
     }
 }
 
-void Screen::scrollUp(LineCount _n, Margin _margin)
+template <typename T>
+void Screen<T>::scrollUp(LineCount n, GraphicsAttributes sgr, Margin margin)
 {
-    grid().scrollUp(_n, cursor().graphicsRendition, _margin);
+    auto const scrollCount = grid().scrollUp(n, sgr, margin);
+    eventListener_.onBufferScrolled(scrollCount);
 }
 
-void Screen::scrollDown(LineCount _n, Margin _margin)
+template <typename T>
+void Screen<T>::scrollUp(LineCount _n, Margin _margin)
+{
+    scrollUp(_n, cursor().graphicsRendition, _margin);
+}
+
+template <typename T>
+void Screen<T>::scrollDown(LineCount _n, Margin _margin)
 {
     grid().scrollDown(_n, cursor().graphicsRendition, _margin);
 }
 
-void Screen::setCurrentColumn(ColumnOffset _n)
+template <typename T>
+void Screen<T>::setCurrentColumn(ColumnOffset _n)
 {
     auto const col = cursor_.originMode
         ? margin_.horizontal.from + _n
@@ -1089,14 +1126,16 @@ void Screen::setCurrentColumn(ColumnOffset _n)
     cursor_.position.column = clampedCol;
 }
 
-string Screen::renderMainPageText() const
+template <typename T>
+string Screen<T>::renderMainPageText() const
 {
     return grid().renderMainPageText();
 }
 // }}}
 
 // {{{ ops
-void Screen::linefeed()
+template <typename T>
+void Screen<T>::linefeed()
 {
     if (isModeEnabled(AnsiMode::AutomaticNewLine))
         linefeed(margin_.horizontal.from);
@@ -1104,35 +1143,41 @@ void Screen::linefeed()
         linefeed(realCursorPosition().column);
 }
 
-void Screen::backspace()
+template <typename T>
+void Screen<T>::backspace()
 {
     if (cursor_.position.column.value)
         cursor_.position.column--;
 }
 
-void Screen::deviceStatusReport()
+template <typename T>
+void Screen<T>::deviceStatusReport()
 {
     reply("\033[0n");
 }
 
-void Screen::reportCursorPosition()
+template <typename T>
+void Screen<T>::reportCursorPosition()
 {
     reply("\033[{};{}R", logicalCursorPosition().line + 1, logicalCursorPosition().column + 1);
 }
 
-void Screen::reportExtendedCursorPosition()
+template <typename T>
+void Screen<T>::reportExtendedCursorPosition()
 {
     auto const pageNum = 1;
     reply("\033[{};{};{}R", logicalCursorPosition().line + 1, logicalCursorPosition().column + 1, pageNum);
 }
 
-void Screen::selectConformanceLevel(VTType _level)
+template <typename T>
+void Screen<T>::selectConformanceLevel(VTType _level)
 {
     // Don't enforce the selected conformance level, just remember it.
     terminalId_ = _level;
 }
 
-void Screen::sendDeviceAttributes()
+template <typename T>
+void Screen<T>::sendDeviceAttributes()
 {
     // See https://vt100.net/docs/vt510-rm/DA1.html
 
@@ -1174,7 +1219,8 @@ void Screen::sendDeviceAttributes()
     reply("\033[?{};{}c", id, attrs);
 }
 
-void Screen::sendTerminalId()
+template <typename T>
+void Screen<T>::sendTerminalId()
 {
     // Note, this is "Secondary DA".
     // It requests for the terminalID
@@ -1192,7 +1238,8 @@ void Screen::sendTerminalId()
     reply("\033[>{};{};{}c", Pp, Pv, Pc);
 }
 
-void Screen::clearToEndOfScreen()
+template <typename T>
+void Screen<T>::clearToEndOfScreen()
 {
     clearToEndOfLine();
 
@@ -1203,7 +1250,8 @@ void Screen::clearToEndOfScreen()
     }
 }
 
-void Screen::clearToBeginOfScreen()
+template <typename T>
+void Screen<T>::clearToBeginOfScreen()
 {
     clearToBeginOfLine();
 
@@ -1214,7 +1262,8 @@ void Screen::clearToBeginOfScreen()
     }
 }
 
-void Screen::clearScreen()
+template <typename T>
+void Screen<T>::clearScreen()
 {
     // Instead of *just* clearing the screen, and thus, losing potential important content,
     // we scroll up by RowCount number of lines, so move it all into history, so the user can scroll
@@ -1222,34 +1271,36 @@ void Screen::clearScreen()
     scrollUp(pageSize_.lines);
 }
 
-void Screen::clearScrollbackBuffer()
+template <typename T>
+void Screen<T>::clearScrollbackBuffer()
 {
     primaryGrid().clearHistory();
     alternateGrid().clearHistory();
     eventListener_.scrollbackBufferCleared();
 }
 
-void Screen::eraseCharacters(ColumnCount _n)
+template <typename T>
+void Screen<T>::eraseCharacters(ColumnCount _n)
 {
     // Spec: https://vt100.net/docs/vt510-rm/ECH.html
     // It's not clear from the spec how to perform erase when inside margin and number of chars to be erased would go outside margins.
     // TODO: See what xterm does ;-)
 
     // erase characters from current colum to the right
-    auto const n = min(
-        pageSize_.columns - realCursorPosition().column.as<ColumnCount>(),
-        *_n == 0 ? ColumnCount(1) : _n
-    ).as<long>();
+    auto const columnsAvailable = pageSize_.columns - boxed_cast<ColumnCount>(realCursorPosition().column);
+    auto const n = unbox<long>(clamp(_n, ColumnCount(1), columnsAvailable));
 
-    for (auto i = &useCurrentCell(), e = &useCellAt(cursor_.position.line, cursor_.position.column + int(n)); i != e; ++i)
-        i->reset(cursor_.graphicsRendition);
+    auto& line = grid().lineAt(cursor_.position.line);
+    for (int i = 0; i < n; ++i)
+        line.useCellAt(cursor_.position.column + i).reset(cursor_.graphicsRendition);
 
     // Shrink column count for currentLine
     //currentLine().setSize(ColumnCount::cast_from(currentLine().end_offset() - n));
     // TODO(pr) ^^^ do we still need or want that line above? ^^^
 }
 
-void Screen::clearToEndOfLine()
+template <typename T>
+void Screen<T>::clearToEndOfLine()
 {
     Cell* i = &at(cursor_.position);
     Cell* e = i + (pageSize_.columns.as<int>() - cursor_.position.column.as<int>());
@@ -1258,9 +1309,16 @@ void Screen::clearToEndOfLine()
         i->reset(cursor_.graphicsRendition);
         ++i;
     }
+
+    auto const line = cursor_.position.line;
+    auto const left = cursor_.position.column;
+    auto const right = boxed_cast<ColumnOffset>(pageSize_.columns - 1);
+    auto const area = Rect{Top(*line), Left(*left), Bottom(*line), Right(*right)};
+    eventListener_.markRegionDirty(area);
 }
 
-void Screen::clearToBeginOfLine()
+template <typename T>
+void Screen<T>::clearToBeginOfLine()
 {
     Cell* i = &at(cursor_.position.line, ColumnOffset(0));
     Cell* e = i + cursor_.position.column.as<int>() + 1;
@@ -1271,7 +1329,8 @@ void Screen::clearToBeginOfLine()
     }
 }
 
-void Screen::clearLine()
+template <typename T>
+void Screen<T>::clearLine()
 {
     Cell* i = &at(cursor_.position.line, ColumnOffset(0));
     Cell* e = i + pageSize_.columns.as<int>();
@@ -1280,27 +1339,37 @@ void Screen::clearLine()
         i->reset(cursor_.graphicsRendition);
         ++i;
     }
+
+    auto const line = cursor_.position.line;
+    auto const left = ColumnOffset(0);
+    auto const right = boxed_cast<ColumnOffset>(pageSize_.columns - 1);
+    auto const area = Rect{Top(*line), Left(*left), Bottom(*line), Right(*right)};
+    eventListener_.markRegionDirty(area);
 }
 
-void Screen::moveCursorToNextLine(LineCount _n)
+template <typename T>
+void Screen<T>::moveCursorToNextLine(LineCount _n)
 {
     moveCursorTo(logicalCursorPosition().line + _n.as<LineOffset>(), ColumnOffset(0));
 }
 
-void Screen::moveCursorToPrevLine(LineCount _n)
+template <typename T>
+void Screen<T>::moveCursorToPrevLine(LineCount _n)
 {
     auto const n = min(_n.as<LineOffset>(), logicalCursorPosition().line);
     moveCursorTo(logicalCursorPosition().line - n, ColumnOffset(0));
 }
 
-void Screen::insertCharacters(ColumnCount _n)
+template <typename T>
+void Screen<T>::insertCharacters(ColumnCount _n)
 {
     if (isCursorInsideMargins())
         insertChars(realCursorPosition().line, _n);
 }
 
 /// Inserts @p _n characters at given line @p _lineNo.
-void Screen::insertChars(LineOffset _lineNo, ColumnCount _n)
+template <typename T>
+void Screen<T>::insertChars(LineOffset _lineNo, ColumnCount _n)
 {
     auto const n = min(
         *_n,
@@ -1326,7 +1395,8 @@ void Screen::insertChars(LineOffset _lineNo, ColumnCount _n)
     grid().lineAt(_lineNo).markUsedFirst(_n);
 }
 
-void Screen::insertLines(LineCount _n)
+template <typename T>
+void Screen<T>::insertLines(LineCount _n)
 {
     if (isCursorInsideMargins())
     {
@@ -1340,16 +1410,17 @@ void Screen::insertLines(LineCount _n)
     }
 }
 
-void Screen::insertColumns(ColumnCount _n)
+template <typename T>
+void Screen<T>::insertColumns(ColumnCount _n)
 {
     if (isCursorInsideMargins())
         for (auto lineNo = margin_.vertical.from; lineNo <= margin_.vertical.to; ++lineNo)
             insertChars(lineNo, _n);
 }
 
-void Screen::copyArea(int _top, int _left, int _bottom, int _right, int _page,
-                      int _targetTop, int _targetLeft, int _targetPage
-)
+template <typename T>
+void Screen<T>::copyArea(Rect _sourceArea, int _page,
+                         Coordinate _targetTopLeft, int _targetPage)
 {
     (void) _page;
     (void) _targetPage;
@@ -1358,39 +1429,40 @@ void Screen::copyArea(int _top, int _left, int _bottom, int _right, int _page,
     // "If Pbs is greater than Pts, // or Pls is greater than Prs, the terminal ignores DECCRA."
     //
     // However, the first part "Pbs is greater than Pts" does not make sense.
-    if (_bottom < _top || _right < _left)
+    if (*_sourceArea.bottom < *_sourceArea.top || *_sourceArea.right < *_sourceArea.left)
         return;
 
-    if (_top == _targetTop && _left == _targetLeft)
+    if (*_sourceArea.top == *_targetTopLeft.line && *_sourceArea.left == *_targetTopLeft.column)
         // Copy to its own location => no-op.
         return;
 
     auto const [x0, xInc, xEnd] = [&]() {
-        if (_targetLeft > _left) // moving right
-            return std::tuple{_right - _left, -1, -1};
+        if (*_targetTopLeft.column > *_sourceArea.left) // moving right
+            return std::tuple{*_sourceArea.right - *_sourceArea.left, -1, -1};
         else
-            return std::tuple{0, +1, _right - _left + 1};
+            return std::tuple{0, +1, *_sourceArea.right - *_sourceArea.left + 1};
     }();
 
     auto const [y0, yInc, yEnd] = [&]() {
-        if (_targetTop > _top) // moving down
-            return std::tuple{_bottom - _top, -1, -1};
+        if (*_targetTopLeft.line > *_sourceArea.top) // moving down
+            return std::tuple{*_sourceArea.bottom - *_sourceArea.top, -1, -1};
         else
-            return std::tuple{0, +1, _bottom - _top + 1};
+            return std::tuple{0, +1, *_sourceArea.bottom - *_sourceArea.top + 1};
     }();
 
     for (auto y = y0; y != yEnd; y += yInc)
     {
         for (auto x = x0; x != xEnd; x += xInc)
         {
-            Cell const& sourceCell = at(LineOffset::cast_from(_top + y), ColumnOffset::cast_from(_left + x));
-            Cell& targetCell = at(LineOffset::cast_from(_targetTop + y), ColumnOffset::cast_from(_targetLeft + x));
+            Cell const& sourceCell = at(LineOffset::cast_from(*_sourceArea.top + y), ColumnOffset::cast_from(_sourceArea.left + x));
+            Cell& targetCell = at(LineOffset::cast_from(_targetTopLeft.line + y), ColumnOffset::cast_from(_targetTopLeft.column + x));
             targetCell = sourceCell;
         }
     }
 }
 
-void Screen::eraseArea(int _top, int _left, int _bottom, int _right)
+template <typename T>
+void Screen<T>::eraseArea(int _top, int _left, int _bottom, int _right)
 {
     assert(_right <= unbox<int>(pageSize_.columns));
     assert(_bottom <= unbox<int>(pageSize_.lines));
@@ -1407,7 +1479,8 @@ void Screen::eraseArea(int _top, int _left, int _bottom, int _right)
     }
 }
 
-void Screen::fillArea(char32_t _ch, int _top, int _left, int _bottom, int _right)
+template <typename T>
+void Screen<T>::fillArea(char32_t _ch, int _top, int _left, int _bottom, int _right)
 {
     // "Pch can be any value from 32 to 126 or from 160 to 255."
     if (!(32 <= _ch && _ch <= 126) && !(160 <= _ch && _ch <= 255))
@@ -1425,7 +1498,8 @@ void Screen::fillArea(char32_t _ch, int _top, int _left, int _bottom, int _right
     }
 }
 
-void Screen::deleteLines(LineCount _n)
+template <typename T>
+void Screen<T>::deleteLines(LineCount _n)
 {
     if (isCursorInsideMargins())
     {
@@ -1439,13 +1513,15 @@ void Screen::deleteLines(LineCount _n)
     }
 }
 
-void Screen::deleteCharacters(ColumnCount _n)
+template <typename T>
+void Screen<T>::deleteCharacters(ColumnCount _n)
 {
     if (isCursorInsideMargins() && *_n != 0)
         deleteChars(realCursorPosition().line, realCursorPosition().column, _n);
 }
 
-void Screen::deleteChars(LineOffset _line, ColumnOffset _column, ColumnCount _n)
+template <typename T>
+void Screen<T>::deleteChars(LineOffset _line, ColumnOffset _column, ColumnCount _n)
 {
     auto& line = grid().lineAt(_line);
     auto lineBuffer = line.cells();
@@ -1465,14 +1541,16 @@ void Screen::deleteChars(LineOffset _line, ColumnOffset _column, ColumnCount _n)
     line.markUsedFirst(ColumnCount::cast_from(*margin_.horizontal.to + 1));
 }
 
-void Screen::deleteColumns(ColumnCount _n)
+template <typename T>
+void Screen<T>::deleteColumns(ColumnCount _n)
 {
     if (isCursorInsideMargins())
         for (auto lineNo = margin_.vertical.from; lineNo <= margin_.vertical.to; ++lineNo)
             deleteChars(lineNo, realCursorPosition().column, _n);
 }
 
-void Screen::horizontalTabClear(HorizontalTabClear _which)
+template <typename T>
+void Screen<T>::horizontalTabClear(HorizontalTabClear _which)
 {
     switch (_which)
     {
@@ -1485,27 +1563,30 @@ void Screen::horizontalTabClear(HorizontalTabClear _which)
     }
 }
 
-void Screen::horizontalTabSet()
+template <typename T>
+void Screen<T>::horizontalTabSet()
 {
     setTabUnderCursor();
 }
 
-void Screen::setCurrentWorkingDirectory(string const& _url)
+template <typename T>
+void Screen<T>::setCurrentWorkingDirectory(string const& _url)
 {
     currentWorkingDirectory_ = _url;
 }
 
-void Screen::hyperlink(string _id, string _uri)
+template <typename T>
+void Screen<T>::hyperlink(string _id, string _uri)
 {
     if (_uri.empty())
-        currentHyperlink_ = {};
+        cursor_.hyperlink = {};
     else if (!_id.empty())
-        currentHyperlink_ = hyperlinks_.hyperlinkIdByUserId(_id);
+        cursor_.hyperlink = hyperlinks_.hyperlinkIdByUserId(_id);
     else
     {
-        currentHyperlink_ = hyperlinks_.nextHyperlinkId++;
+        cursor_.hyperlink = hyperlinks_.nextHyperlinkId++;
         hyperlinks_.cache.emplace(
-            currentHyperlink_,
+            cursor_.hyperlink,
             make_shared<HyperlinkInfo>(HyperlinkInfo{move(_id), move(_uri)})
         );
     }
@@ -1515,7 +1596,8 @@ void Screen::hyperlink(string _id, string _uri)
     // alternate screen (not for main screen!)
 }
 
-void Screen::moveCursorUp(LineCount _n)
+template <typename T>
+void Screen<T>::moveCursorUp(LineCount _n)
 {
     wrapPending_ = 0;
     auto const n = min(
@@ -1528,7 +1610,8 @@ void Screen::moveCursorUp(LineCount _n)
     cursor_.position.line -= n;
 }
 
-void Screen::moveCursorDown(LineCount _n)
+template <typename T>
+void Screen<T>::moveCursorDown(LineCount _n)
 {
     wrapPending_ = 0;
     auto const currentLineNumber = logicalCursorPosition().line;
@@ -1542,14 +1625,16 @@ void Screen::moveCursorDown(LineCount _n)
     cursor_.position.line += n;
 }
 
-void Screen::moveCursorForward(ColumnCount _n)
+template <typename T>
+void Screen<T>::moveCursorForward(ColumnCount _n)
 {
     wrapPending_ = 0;
     cursor_.position.column = min(cursor_.position.column + _n.as<ColumnOffset>(),
                                   margin_.horizontal.to);
 }
 
-void Screen::moveCursorBackward(ColumnCount _n)
+template <typename T>
+void Screen<T>::moveCursorBackward(ColumnCount _n)
 {
     // even if you move to 80th of 80 columns, it'll first write a char and THEN flag wrap pending
     wrapPending_ = false;
@@ -1559,22 +1644,26 @@ void Screen::moveCursorBackward(ColumnCount _n)
     setCurrentColumn(cursor_.position.column - n);
 }
 
-void Screen::moveCursorToColumn(ColumnOffset _column)
+template <typename T>
+void Screen<T>::moveCursorToColumn(ColumnOffset _column)
 {
     setCurrentColumn(_column);
 }
 
-void Screen::moveCursorToBeginOfLine()
+template <typename T>
+void Screen<T>::moveCursorToBeginOfLine()
 {
     setCurrentColumn(ColumnOffset(0));
 }
 
-void Screen::moveCursorToLine(LineOffset _row)
+template <typename T>
+void Screen<T>::moveCursorToLine(LineOffset _row)
 {
     moveCursorTo(_row, cursor_.position.column);
 }
 
-void Screen::moveCursorToNextTab()
+template <typename T>
+void Screen<T>::moveCursorToNextTab()
 {
     // TODO: I guess something must remember when a \t was added, for proper move-back?
     // TODO: respect HTS/TBC
@@ -1589,9 +1678,9 @@ void Screen::moveCursorToNextTab()
         auto const currentCursorColumn = logicalCursorPosition().column;
 
         if (i < tabs_.size())
-            moveCursorForward((tabs_[i] - currentCursorColumn).as<ColumnCount>());
+            moveCursorForward(boxed_cast<ColumnCount>(tabs_[i] - currentCursorColumn));
         else if (realCursorPosition().column < margin_.horizontal.to)
-            moveCursorForward((margin_.horizontal.to - currentCursorColumn).as<ColumnCount>());
+            moveCursorForward(boxed_cast<ColumnCount>(margin_.horizontal.to - currentCursorColumn));
         else
             moveCursorToNextLine(LineCount(1));
     }
@@ -1602,7 +1691,7 @@ void Screen::moveCursorToNextTab()
         {
             auto const n = min(
                 (tabWidth_ - cursor_.position.column.as<ColumnCount>() % tabWidth_),
-                pageSize_.columns - logicalCursorPosition().column.as<ColumnCount>()
+                pageSize_.columns - boxed_cast<ColumnCount>(logicalCursorPosition().column)
             );
             moveCursorForward(n);
         }
@@ -1621,13 +1710,15 @@ void Screen::moveCursorToNextTab()
     }
 }
 
-void Screen::notify(string const& _title, string const& _content)
+template <typename T>
+void Screen<T>::notify(string const& _title, string const& _content)
 {
     std::cout << "Screen.NOTIFY: title: '" << _title << "', content: '" << _content << "'\n";
     eventListener_.notify(_title, _content);
 }
 
-void Screen::captureBuffer(int _lineCount, bool _logicalLines)
+template <typename T>
+void Screen<T>::captureBuffer(int _lineCount, bool _logicalLines)
 {
     // TODO: Unit test case! (for ensuring line numbering and limits are working as expected)
 
@@ -1690,13 +1781,15 @@ void Screen::captureBuffer(int _lineCount, bool _logicalLines)
     reply("\033]314;\033\\"); // mark the end
 }
 
-void Screen::cursorForwardTab(TabStopCount _count)
+template <typename T>
+void Screen<T>::cursorForwardTab(TabStopCount _count)
 {
     for (int i = 0; i < unbox<int>(_count); ++i)
         moveCursorToNextTab();
 }
 
-void Screen::cursorBackwardTab(TabStopCount _count)
+template <typename T>
+void Screen<T>::cursorBackwardTab(TabStopCount _count)
 {
     if (!_count)
         return;
@@ -1742,7 +1835,8 @@ void Screen::cursorBackwardTab(TabStopCount _count)
     }
 }
 
-void Screen::index()
+template <typename T>
+void Screen<T>::index()
 {
     if (*realCursorPosition().line == *margin_.vertical.to)
         scrollUp(LineCount(1));
@@ -1750,15 +1844,17 @@ void Screen::index()
         moveCursorDown(LineCount(1));
 }
 
-void Screen::reverseIndex()
+template <typename T>
+void Screen<T>::reverseIndex()
 {
-    if (realCursorPosition().line.as<int>() == margin_.vertical.from.as<int>())
+    if (unbox<int>(realCursorPosition().line) == unbox<int>(margin_.vertical.from))
         scrollDown(LineCount(1));
     else
         moveCursorUp(LineCount(1));
 }
 
-void Screen::backIndex()
+template <typename T>
+void Screen<T>::backIndex()
 {
     if (realCursorPosition().column == margin_.horizontal.from)
         ;// TODO: scrollRight(1);
@@ -1766,7 +1862,8 @@ void Screen::backIndex()
         moveCursorForward(ColumnCount(1));
 }
 
-void Screen::forwardIndex()
+template <typename T>
+void Screen<T>::forwardIndex()
 {
     if (*realCursorPosition().column + 1 == *margin_.horizontal.to)
         ;// TODO: scrollLeft(1);
@@ -1774,22 +1871,26 @@ void Screen::forwardIndex()
         moveCursorDown(LineCount(1));
 }
 
-void Screen::setForegroundColor(Color _color)
+template <typename T>
+void Screen<T>::setForegroundColor(Color _color)
 {
     cursor_.graphicsRendition.foregroundColor = _color;
 }
 
-void Screen::setBackgroundColor(Color _color)
+template <typename T>
+void Screen<T>::setBackgroundColor(Color _color)
 {
     cursor_.graphicsRendition.backgroundColor = _color;
 }
 
-void Screen::setUnderlineColor(Color _color)
+template <typename T>
+void Screen<T>::setUnderlineColor(Color _color)
 {
     cursor_.graphicsRendition.underlineColor = _color;
 }
 
-void Screen::setCursorStyle(CursorDisplay _display, CursorShape _shape)
+template <typename T>
+void Screen<T>::setCursorStyle(CursorDisplay _display, CursorShape _shape)
 {
     cursorDisplay_ = _display;
     cursorShape_ = _shape;
@@ -1797,7 +1898,8 @@ void Screen::setCursorStyle(CursorDisplay _display, CursorShape _shape)
     eventListener_.setCursorStyle(_display, _shape);
 }
 
-void Screen::setGraphicsRendition(GraphicsRendition _rendition)
+template <typename T>
+void Screen<T>::setGraphicsRendition(GraphicsRendition _rendition)
 {
     // TODO: optimize this as there are only 3 cases
     // 1.) reset
@@ -1884,22 +1986,26 @@ void Screen::setGraphicsRendition(GraphicsRendition _rendition)
     }
 }
 
-void Screen::setMark()
+template <typename T>
+void Screen<T>::setMark()
 {
     currentLine().setMarked(true);
 }
 
-void Screen::saveModes(std::vector<DECMode> const& _modes)
+template <typename T>
+void Screen<T>::saveModes(std::vector<DECMode> const& _modes)
 {
     modes_.save(_modes);
 }
 
-void Screen::restoreModes(std::vector<DECMode> const& _modes)
+template <typename T>
+void Screen<T>::restoreModes(std::vector<DECMode> const& _modes)
 {
     modes_.restore(_modes);
 }
 
-void Screen::setMode(AnsiMode _mode, bool _enable)
+template <typename T>
+void Screen<T>::setMode(AnsiMode _mode, bool _enable)
 {
     if (!isValidAnsiMode(static_cast<int>(_mode)))
         return;
@@ -1907,7 +2013,8 @@ void Screen::setMode(AnsiMode _mode, bool _enable)
     modes_.set(_mode, _enable);
 }
 
-void Screen::setMode(DECMode _mode, bool _enable)
+template <typename T>
+void Screen<T>::setMode(DECMode _mode, bool _enable)
 {
     if (!isValidDECMode(static_cast<int>(_mode)))
         return;
@@ -2056,7 +2163,8 @@ enum class ModeResponse { // TODO: respect response 0, 3, 4.
     PermanentlyReset = 4
 };
 
-void Screen::requestAnsiMode(int _mode)
+template <typename T>
+void Screen<T>::requestAnsiMode(int _mode)
 {
     ModeResponse const modeResponse =
         isValidAnsiMode(_mode)
@@ -2070,7 +2178,8 @@ void Screen::requestAnsiMode(int _mode)
     reply("\033[{};{}$y", code, static_cast<unsigned>(modeResponse));
 }
 
-void Screen::requestDECMode(int _mode)
+template <typename T>
+void Screen<T>::requestDECMode(int _mode)
 {
     ModeResponse const modeResponse =
         isValidDECMode(_mode)
@@ -2084,7 +2193,8 @@ void Screen::requestDECMode(int _mode)
     reply("\033[?{};{}$y", code, static_cast<unsigned>(modeResponse));
 }
 
-void Screen::setTopBottomMargin(optional<LineOffset> _top, optional<LineOffset> _bottom)
+template <typename T>
+void Screen<T>::setTopBottomMargin(optional<LineOffset> _top, optional<LineOffset> _bottom)
 {
 	auto const bottom = _bottom.has_value()
 		? min(_bottom.value(), pageSize_.lines.as<LineOffset>() - 1)
@@ -2100,7 +2210,8 @@ void Screen::setTopBottomMargin(optional<LineOffset> _top, optional<LineOffset> 
     }
 }
 
-void Screen::setLeftRightMargin(optional<ColumnOffset> _left, optional<ColumnOffset> _right)
+template <typename T>
+void Screen<T>::setLeftRightMargin(optional<ColumnOffset> _left, optional<ColumnOffset> _right)
 {
     if (isModeEnabled(DECMode::LeftRightMargin))
     {
@@ -2117,7 +2228,8 @@ void Screen::setLeftRightMargin(optional<ColumnOffset> _left, optional<ColumnOff
     }
 }
 
-void Screen::screenAlignmentPattern()
+template <typename T>
+void Screen<T>::screenAlignmentPattern()
 {
     // sets the margins to the extremes of the page
     margin_.vertical.from = LineOffset(0);
@@ -2136,30 +2248,35 @@ void Screen::screenAlignmentPattern()
     }
 }
 
-void Screen::sendMouseEvents(MouseProtocol _protocol, bool _enable)
+template <typename T>
+void Screen<T>::sendMouseEvents(MouseProtocol _protocol, bool _enable)
 {
     eventListener_.setMouseProtocol(_protocol, _enable);
 }
 
-void Screen::applicationKeypadMode(bool _enable)
+template <typename T>
+void Screen<T>::applicationKeypadMode(bool _enable)
 {
     eventListener_.setApplicationkeypadMode(_enable);
 }
 
-void Screen::designateCharset(CharsetTable _table, CharsetId _charset)
+template <typename T>
+void Screen<T>::designateCharset(CharsetTable _table, CharsetId _charset)
 {
     // TODO: unit test SCS and see if they also behave well with reset/softreset
     // Also, is the cursor shared between the two buffers?
     cursor_.charsets.select(_table, _charset);
 }
 
-void Screen::singleShiftSelect(CharsetTable _table)
+template <typename T>
+void Screen<T>::singleShiftSelect(CharsetTable _table)
 {
     // TODO: unit test SS2, SS3
     cursor_.charsets.singleShift(_table);
 }
 
-void Screen::sixelImage(ImageSize _pixelSize, Image::Data&& _data)
+template <typename T>
+void Screen<T>::sixelImage(ImageSize _pixelSize, Image::Data&& _data)
 {
     auto const columnCount = ColumnCount::cast_from(ceilf(float(*_pixelSize.width) / float(*cellPixelSize_.width)));
     auto const lineCount = LineCount::cast_from(ceilf(float(*_pixelSize.height) / float(*cellPixelSize_.height)));
@@ -2183,17 +2300,19 @@ void Screen::sixelImage(ImageSize _pixelSize, Image::Data&& _data)
         linefeed(topLeft.column);
 }
 
-Image const& Screen::uploadImage(ImageFormat _format, ImageSize _imageSize, Image::Data&& _pixmap)
+template <typename T>
+Image const& Screen<T>::uploadImage(ImageFormat _format, ImageSize _imageSize, Image::Data&& _pixmap)
 {
     return imagePool_.create(_format, _imageSize, move(_pixmap));
 }
 
-void Screen::renderImage(ImageId _imageId,
-                         Coordinate _topLeft, GridSize _gridSize,
-                         Coordinate _imageOffset, ImageSize _imageSize,
-                         ImageAlignment _alignmentPolicy,
-                         ImageResize _resizePolicy,
-                         bool _autoScroll)
+template <typename T>
+void Screen<T>::renderImage(ImageId _imageId,
+                            Coordinate _topLeft, GridSize _gridSize,
+                            Coordinate _imageOffset, ImageSize _imageSize,
+                            ImageAlignment _alignmentPolicy,
+                            ImageResize _resizePolicy,
+                            bool _autoScroll)
 {
     // TODO: make use of _imageOffset and _imageSize
     (void) _imageOffset;
@@ -2232,7 +2351,7 @@ void Screen::renderImage(ImageId _imageId,
                         Coordinate{offset.line, offset.column}
                     }
                 );
-                cell.setHyperlink(currentHyperlink_);
+                cell.setHyperlink(cursor_.hyperlink);
             }
         );
         moveCursorTo(Coordinate{_topLeft.line + unbox<int>(linesToBeRendered) - 1, _topLeft.column});
@@ -2258,12 +2377,12 @@ void Screen::renderImage(ImageId _imageId,
                         ImageFragment{
                             rasterizedImage,
                             Coordinate{
-                                linesToBeRendered.as<LineOffset>() + lineOffset,
+                                boxed_cast<LineOffset>(linesToBeRendered) + lineOffset,
                                 columnOffset
                             }
                         }
                     );
-                    cell.setHyperlink(currentHyperlink_);
+                    cell.setHyperlink(cursor_.hyperlink);
                 }
             );
         }
@@ -2273,18 +2392,21 @@ void Screen::renderImage(ImageId _imageId,
     moveCursorToColumn(_topLeft.column + _gridSize.columns.as<ColumnOffset>());
 }
 
-void Screen::setWindowTitle(std::string const& _title)
+template <typename T>
+void Screen<T>::setWindowTitle(std::string const& _title)
 {
     windowTitle_ = _title;
     eventListener_.setWindowTitle(_title);
 }
 
-void Screen::saveWindowTitle()
+template <typename T>
+void Screen<T>::saveWindowTitle()
 {
     savedWindowTitles_.push(windowTitle_);
 }
 
-void Screen::restoreWindowTitle()
+template <typename T>
+void Screen<T>::restoreWindowTitle()
 {
     if (!savedWindowTitles_.empty())
     {
@@ -2294,7 +2416,8 @@ void Screen::restoreWindowTitle()
     }
 }
 
-void Screen::requestDynamicColor(DynamicColorName _name)
+template <typename T>
+void Screen<T>::requestDynamicColor(DynamicColorName _name)
 {
     auto const color = [&]() -> optional<RGBColor>
     {
@@ -2334,7 +2457,8 @@ void Screen::requestDynamicColor(DynamicColorName _name)
     }
 }
 
-void Screen::requestPixelSize(RequestPixelSize _area)
+template <typename T>
+void Screen<T>::requestPixelSize(RequestPixelSize _area)
 {
     switch (_area)
     {
@@ -2359,7 +2483,8 @@ void Screen::requestPixelSize(RequestPixelSize _area)
     }
 }
 
-void Screen::requestCharacterSize(RequestPixelSize _area) // TODO: rename RequestPixelSize to RequestArea?
+template <typename T>
+void Screen<T>::requestCharacterSize(RequestPixelSize _area) // TODO: rename RequestPixelSize to RequestArea?
 {
     switch (_area)
     {
@@ -2375,7 +2500,8 @@ void Screen::requestCharacterSize(RequestPixelSize _area) // TODO: rename Reques
     }
 }
 
-void Screen::requestStatusString(RequestStatusString _value)
+template <typename T>
+void Screen<T>::requestStatusString(RequestStatusString _value)
 {
     // xterm responds with DCS 1 $ r Pt ST for valid requests
     // or DCS 0 $ r Pt ST for invalid requests.
@@ -2455,7 +2581,8 @@ void Screen::requestStatusString(RequestStatusString _value)
     );
 }
 
-void Screen::requestTabStops()
+template <typename T>
+void Screen<T>::requestTabStops()
 {
     // Response: `DCS 2 $ u Pt ST`
     ostringstream dcs;
@@ -2491,7 +2618,8 @@ namespace
     }
 }
 
-void Screen::requestCapability(std::string_view _name)
+template <typename T>
+void Screen<T>::requestCapability(std::string_view _name)
 {
     if (!respondToTCapQuery_)
     {
@@ -2516,7 +2644,8 @@ void Screen::requestCapability(std::string_view _name)
         reply("\033P0+r\033\\");
 }
 
-void Screen::requestCapability(capabilities::Code _code)
+template <typename T>
+void Screen<T>::requestCapability(capabilities::Code _code)
 {
     if (!respondToTCapQuery_)
     {
@@ -2546,7 +2675,8 @@ void Screen::requestCapability(capabilities::Code _code)
         reply("\033P0+r\033\\");
 }
 
-void Screen::resetDynamicColor(DynamicColorName _name)
+template <typename T>
+void Screen<T>::resetDynamicColor(DynamicColorName _name)
 {
     switch (_name)
     {
@@ -2574,7 +2704,8 @@ void Screen::resetDynamicColor(DynamicColorName _name)
     }
 }
 
-void Screen::setDynamicColor(DynamicColorName _name, RGBColor _value)
+template <typename T>
+void Screen<T>::setDynamicColor(DynamicColorName _name, RGBColor _value)
 {
     switch (_name)
     {
@@ -2602,12 +2733,14 @@ void Screen::setDynamicColor(DynamicColorName _name, RGBColor _value)
     }
 }
 
-void Screen::dumpState()
+template <typename T>
+void Screen<T>::dumpState()
 {
     eventListener_.dumpState();
 }
 
-void Screen::dumpState(std::string const& _message, std::ostream& _os) const
+template <typename T>
+void Screen<T>::dumpState(std::string const& _message, std::ostream& _os) const
 {
     auto const hline = [&]() {
         for_each(crispy::times(*pageSize_.columns), [&](auto) { _os << '='; });
@@ -2657,7 +2790,8 @@ void Screen::dumpState(std::string const& _message, std::ostream& _os) const
     // - ... other output related modes
 }
 
-void Screen::smGraphics(XtSmGraphics::Item _item, XtSmGraphics::Action _action, XtSmGraphics::Value _value)
+template <typename T>
+void Screen<T>::smGraphics(XtSmGraphics::Item _item, XtSmGraphics::Action _action, XtSmGraphics::Value _value)
 {
     using Item = XtSmGraphics::Item;
     using Action = XtSmGraphics::Action;
@@ -2746,3 +2880,9 @@ void Screen::smGraphics(XtSmGraphics::Item _item, XtSmGraphics::Action _action, 
 // }}}
 
 } // namespace terminal
+
+template class terminal::Screen<terminal::MockTerm>;
+
+#include <terminal/Terminal.h>
+template class terminal::Screen<terminal::Terminal>;
+//template class terminal::Screen<terminal::MockScreenEvents>;

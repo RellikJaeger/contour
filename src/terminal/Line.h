@@ -16,11 +16,12 @@
 #include <terminal/primitives.h>
 #include <terminal/GraphicsAttributes.h>
 
-#include <crispy/Comparison.h>
-
 #include <gsl/gsl_assert>
 #include <gsl/span>
 #include <gsl/span_ext>
+
+#include <crispy/Comparison.h>
+#include <crispy/assert.h>
 
 #include <iterator>
 #include <sstream>
@@ -135,7 +136,9 @@ public:
      */
     void fill(ColumnOffset _start, GraphicsAttributes const& _sgr, std::string_view _ascii)
     {
-        assert(unbox<size_t>(_start) + _ascii.size() <= buffer_.size());
+        auto& buffer = editable();
+
+        assert(unbox<size_t>(_start) + _ascii.size() <= buffer.size());
 
         auto constexpr ASCII_Width = 1;
         auto const* s = _ascii.data();
@@ -148,7 +151,7 @@ public:
         // if constexpr (ColumnOptimized)
         // {
         //     #if !defined(LINE_AVOID_CELL_RESET)
-        //     auto const e2 = buffer_.data() + unbox<long>(columnsUsed());
+        //     auto const e2 = buffer.data() + unbox<long>(columnsUsed());
         //     while (i != e2)
         //         (i++)->reset();
         //     #endif
@@ -156,7 +159,7 @@ public:
         // }
         // else
         {
-            auto const e2 = buffer_.data() + buffer_.size();
+            auto const e2 = buffer.data() + buffer.size();
             while (i != e2)
                 (i++)->reset();
         }
@@ -200,15 +203,16 @@ public:
     Cell& useCellAt(ColumnOffset _column) noexcept
     {
         assert(ColumnOffset(0) <= _column);
-        assert(_column <= ColumnOffset::cast_from(buffer_.size())); // Allow off-by-one for sentinel.
+        assert(_column < ColumnOffset::cast_from(buffer_.size())); // Allow off-by-one for sentinel.
         // if constexpr (ColumnOptimized)
         //     usedColumns_.value.value = std::max(usedColumns_.value.value, _column.value + 1);
-        return buffer_[unbox<int>(_column)];
+        return editable().at(unbox<int>(_column));
     }
 
     Cell const& at(ColumnOffset _column) const noexcept
     {
-        assert(ColumnOffset(0) <= _column);
+        Expects(ColumnOffset(0) <= _column);
+        Expects(_column < ColumnOffset::cast_from(buffer_.size())); // Allow off-by-one for sentinel.
         return buffer_[unbox<int>(_column)];
     }
 
@@ -251,9 +255,11 @@ public:
     std::string toUtf8() const;
     std::string toUtf8Trimmed() const;
 
-    void prepend(Buffer const& _cells);
-    void append(Buffer const& _cells);
-    void append(int _count, Cell const& _initial);
+    // Returns a reference to this mutable grid-line buffer.
+    //
+    // If this line has been stored in an optimized state, then
+    // the line will be first unpacked into a vector of grid cells.
+    Buffer& editable();
 
 private:
     Buffer buffer_;
@@ -274,6 +280,16 @@ constexpr LineFlags operator~(LineFlags a) noexcept
 constexpr LineFlags operator&(LineFlags a, LineFlags b) noexcept
 {
     return LineFlags(unsigned(a) & unsigned(b));
+}
+
+template <typename Cell, bool Optimize>
+inline typename Line<Cell, Optimize>::Buffer& Line<Cell, Optimize>::editable()
+{
+    // TODO: when we impement the line text buffer optimization,
+    // then this is the place where we want to *promote* a possibly
+    // optimized text buffer to a full grid line buffer.
+
+    return buffer_;
 }
 
 }

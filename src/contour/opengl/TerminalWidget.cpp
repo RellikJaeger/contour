@@ -238,7 +238,7 @@ namespace // {{{
 
 // {{{ Widget creation and QOpenGLWidget overides
 TerminalWidget::TerminalWidget(
-    config::TerminalProfile const& _profile,
+    config::TerminalProfile const& _profile, // TODO(PR): OH I am unused!
     TerminalSession& _session,
     function<void()> _adaptSize,
     function<void(bool)> _enableBackgroundBlur
@@ -592,7 +592,6 @@ void TerminalWidget::assertInitialized()
 
 void TerminalWidget::onScrollBarValueChanged(int _value)
 {
-    fmt::print("TerminalWidget.onScrollBarValueChanged: {}\n", _value);
     terminal().viewport().scrollTo(terminal::ScrollOffset::cast_from(_value));
     scheduleRedraw();
 }
@@ -902,11 +901,6 @@ void TerminalWidget::setMouseCursorShape(MouseCursorShape _shape)
 {
     if (auto const newShape = toQtMouseShape(_shape); newShape != cursor().shape())
         setCursor(newShape);
-}
-
-void TerminalWidget::setTerminalProfile(config::TerminalProfile _profile)
-{
-    (void) _profile;
 }
 
 void TerminalWidget::setWindowTitle(string_view _title)

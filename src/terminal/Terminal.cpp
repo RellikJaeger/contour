@@ -76,6 +76,7 @@ Terminal::Terminal(Pty& _pty,
                    int _ptyReadBufferSize,
                    Terminal::Events& _eventListener,
                    LineCount _maxHistoryLineCount,
+                   LineOffset _copyLastMarkRangeOffset,
                    chrono::milliseconds _cursorBlinkInterval,
                    chrono::steady_clock::time_point _now,
                    string const& _wordDelimiters,
@@ -102,6 +103,7 @@ Terminal::Terminal(Pty& _pty,
     wordDelimiters_{ unicode::from_utf8(_wordDelimiters) },
     mouseProtocolBypassModifier_{ _mouseProtocolBypassModifier },
     inputGenerator_{},
+    copyLastMarkRangeOffset_{ _copyLastMarkRangeOffset },
     screen_{
         pty_.screenSize(),
         *this,
@@ -114,8 +116,8 @@ Terminal::Terminal(Pty& _pty,
         _colorPalette,
         _allowReflowOnResize
     },
-    screenUpdateThread_{},
-    viewport_{ screen_, [this]() { breakLoopAndRefreshRenderBuffer(); } }
+    viewport_{ screen_, [this]() { breakLoopAndRefreshRenderBuffer(); } },
+    selectionHelper_{this}
 {
 }
 
@@ -140,6 +142,11 @@ void Terminal::resetHard()
 void Terminal::setRefreshRate(double _refreshRate)
 {
     refreshInterval_ = std::chrono::milliseconds(static_cast<long long>(1000.0 / _refreshRate));
+}
+
+void Terminal::setLastMarkRangeOffset(LineOffset _value) noexcept
+{
+    copyLastMarkRangeOffset_ = _value;
 }
 
 void Terminal::mainLoop()
@@ -315,6 +322,41 @@ RenderCell makeRenderCell(ColorPalette const& _colorPalette,
     return cell;
 }
 
+PageSize Terminal::SelectionHelper::pageSize() const noexcept
+{
+    return terminal->screenSize();
+}
+
+bool Terminal::SelectionHelper::wordDelimited(Coordinate _pos) const noexcept
+{
+    // Word selection may be off by one
+    _pos.column = min(_pos.column, boxed_cast<ColumnOffset>(terminal->screenSize().columns - 1));
+
+    Cell const& cell = terminal->screen().at(_pos);
+    return cell.empty() || terminal->wordDelimiters_.find(cell.codepoint(0)) != terminal->wordDelimiters_.npos;
+}
+
+bool Terminal::SelectionHelper::wrappedLine(LineOffset _line) const noexcept
+{
+    return terminal->screen().isLineWrapped(_line);
+}
+
+bool Terminal::SelectionHelper::cellEmpty(Coordinate _pos) const noexcept
+{
+    // Word selection may be off by one
+    _pos.column = min(_pos.column, boxed_cast<ColumnOffset>(terminal->screenSize().columns - 1));
+
+    return terminal->screen().at(_pos).empty();
+}
+
+int Terminal::SelectionHelper::cellWidth(Coordinate _pos) const noexcept
+{
+    // Word selection may be off by one
+    _pos.column = min(_pos.column, boxed_cast<ColumnOffset>(terminal->screenSize().columns - 1));
+
+    return terminal->screen().at(_pos).width();
+}
+
 void Terminal::refreshRenderBufferInternal(RenderBuffer& _output)
 {
     auto const renderHyperlinks = screen_.contains(currentMousePosition_);
@@ -355,7 +397,7 @@ void Terminal::refreshRenderBufferInternal(RenderBuffer& _output)
         (Cell const& _cell, LineOffset _line, ColumnOffset _column)
         mutable
         {
-            auto const selected = isSelected(Coordinate{_line, _column});
+            auto const selected = isSelected(Coordinate{_line - boxed_cast<LineOffset>(viewport_.scrollOffset()), _column});
             auto const [fg, bg] = makeColors(screen_.colorPalette(), _cell, reverseVideo, selected);
 
             auto const cellEmpty = (_cell.codepointCount() == 0 || _cell.codepoint(0) == 0x20)
@@ -497,33 +539,31 @@ bool Terminal::handleMouseSelection(Modifier _modifier, Timestamp _now)
     speedClicks_ = diff_ms >= 0.0 && diff_ms <= 500.0 ? speedClicks_ + 1 : 1;
     leftMouseButtonPressed_ = true;
 
-    Selector::Mode const selectionMode = [](unsigned _speedClicks, Modifier _modifier) {
-        if (_speedClicks == 3)
-            return Selector::Mode::FullLine;
-        else if (_modifier.contains(Modifier::Control))
-            return Selector::Mode::Rectangular;
-        else if (_speedClicks == 2)
-            return Selector::Mode::LinearWordWise;
-        else
-            return Selector::Mode::Linear;
-    }(speedClicks_, _modifier);
+    auto const startPos = Coordinate{
+        currentMousePosition_.line - boxed_cast<LineOffset>(viewport_.scrollOffset()),
+        currentMousePosition_.column,
+    };
 
-    if (!selectionAvailable()
-        || selector()->state() == Selector::State::Waiting
-        || speedClicks_ >= 2)
+    switch (speedClicks_)
     {
-        setSelector(make_unique<Selector>(
-            selectionMode,
-            wordDelimiters_,
-            screen_,
-            currentMousePosition_
-        ));
-
-        if (selectionMode != Selector::Mode::Linear)
-            selector()->extend(currentMousePosition_);
+        case 1:
+            if (_modifier == mouseBlockSelectionModifier_)
+                selection_ = make_unique<RectangularSelection>(selectionHelper_, startPos);
+            else
+                selection_ = make_unique<LinearSelection>(selectionHelper_, startPos);
+            break;
+        case 2:
+            selection_ = make_unique<WordWiseSelection>(selectionHelper_, startPos);
+            selection_->extend(startPos);
+            break;
+        case 3:
+            selection_ = make_unique<FullLineSelection>(selectionHelper_, startPos);
+            selection_->extend(startPos);
+            break;
+        default:
+            clearSelection();
+            break;
     }
-    else if (selector()->state() == Selector::State::Complete)
-        clearSelection();
 
     breakLoopAndRefreshRenderBuffer();
     return true;
@@ -531,7 +571,8 @@ bool Terminal::handleMouseSelection(Modifier _modifier, Timestamp _now)
 
 void Terminal::clearSelection()
 {
-    selector_.reset();
+    selection_.reset();
+    speedClicks_ = 0;
     breakLoopAndRefreshRenderBuffer();
 }
 
@@ -539,10 +580,18 @@ bool Terminal::sendMouseMoveEvent(Coordinate newPosition, Modifier _modifier, Ti
 {
     speedClicks_ = 0;
 
+    if (leftMouseButtonPressed_ && isSelectionComplete())
+        clearSelection();
+
     if (newPosition == currentMousePosition_)
         return false;
 
     currentMousePosition_ = newPosition;
+
+    auto const relativePos = Coordinate{
+        currentMousePosition_.line - boxed_cast<LineOffset>(viewport_.scrollOffset()),
+        currentMousePosition_.column,
+    };
 
     bool changed = updateCursorHoveringState();
 
@@ -556,18 +605,13 @@ bool Terminal::sendMouseMoveEvent(Coordinate newPosition, Modifier _modifier, Ti
     if (leftMouseButtonPressed_ && !selectionAvailable())
     {
         changed = true;
-        setSelector(make_unique<Selector>(
-            Selector::Mode::Linear,
-            wordDelimiters_,
-            screen_,
-            currentMousePosition_
-        ));
+        setSelector(make_unique<LinearSelection>(selectionHelper_, relativePos));
     }
 
-    if (selectionAvailable() && selector()->state() != Selector::State::Complete)
+    if (selectionAvailable() && selector()->state() != Selection::State::Complete)
     {
         changed = true;
-        selector()->extend(newPosition);
+        selector()->extend(relativePos);
         breakLoopAndRefreshRenderBuffer();
         return true;
     }
@@ -593,14 +637,14 @@ bool Terminal::sendMouseReleaseEvent(MouseButton _button, Modifier _modifier, Ti
         {
             switch (selector()->state())
             {
-                case Selector::State::Waiting:
-                    clearSelection();
-                    break;
-                case Selector::State::InProgress:
-                    selector()->stop();
+                case Selection::State::InProgress:
+                    selector()->complete();
                     eventListener_.onSelectionCompleted();
                     break;
-                case Selector::State::Complete:
+                case Selection::State::Waiting:
+                    selection_.reset();
+                    break;
+                case Selection::State::Complete:
                     break;
             }
         }
@@ -773,14 +817,10 @@ string Terminal::extractSelectionText() const
 
 string Terminal::extractLastMarkRange() const
 {
-#if 0 // TODO(pr)
-    using terminal::Coordinate;
-    using terminal::Cell;
-
     auto const _l = std::lock_guard{*this};
 
-    auto const colCount = *screen_.pageSize().columns;
-    auto const bottomLine = *screen_.historyLineCount() + screen_.cursor().position.line - 1;
+    // -1 because we always want to start extracting one line above the cursor by default.
+    auto const bottomLine = screen_.cursor().position.line + LineOffset(-1) + copyLastMarkRangeOffset_;
 
     auto const marker1 = optional{bottomLine};
 
@@ -789,23 +829,19 @@ string Terminal::extractLastMarkRange() const
         return {};
 
     // +1 each for offset change from 0 to 1 and because we only want to start at the line *after* the mark.
-    auto const firstLine = *marker0 - screen_.historyLineCount().as<int>() + 2;
-    auto const lastLine = *marker1 - screen_.historyLineCount().as<int>();
+    auto const firstLine = *marker0 + 1;
+    auto const lastLine = *marker1;
 
     string text;
 
     for (auto lineNum = firstLine; lineNum <= lastLine; ++lineNum)
     {
-        for (auto colNum = 1; colNum < colCount; ++colNum)
-            text += screen_.at({lineNum, colNum}).toUtf8();
-        trimSpaceRight(text);
+        auto const lineText = screen_.grid().lineAt(lineNum).toUtf8Trimmed();
+        text += screen_.grid().lineAt(lineNum).toUtf8Trimmed();
         text += '\n';
     }
 
     return text;
-#else
-    return {};
-#endif
 }
 
 // {{{ ScreenEvents overrides
@@ -821,14 +857,14 @@ void Terminal::bell()
 
 void Terminal::bufferChanged(ScreenType _type)
 {
-    selector_.reset();
+    selection_.reset();
     viewport_.forceScrollToBottom();
     eventListener_.bufferChanged(_type);
 }
 
 void Terminal::scrollbackBufferCleared()
 {
-    selector_.reset();
+    selection_.reset();
     viewport_.scrollToBottom();
     breakLoopAndRefreshRenderBuffer();
 }
@@ -866,7 +902,6 @@ void Terminal::copyToClipboard(string_view _data)
 void Terminal::dumpState()
 {
     eventListener_.dumpState();
-    fmt::print("scroll offset: {}\n", viewport_.scrollOffset());
 }
 
 void Terminal::notify(string_view _title, string_view _body)
@@ -963,10 +998,19 @@ void Terminal::discardImage(Image const& _image)
 
 void Terminal::markCellDirty(Coordinate _position) noexcept
 {
-    if (!selector_)
+    if (!selection_)
         return;
 
-    if (selector_->contains(_position))
+    if (selection_->contains(_position))
+        clearSelection();
+}
+
+void Terminal::markRegionDirty(Rect _area) noexcept
+{
+    if (!selection_)
+        return;
+
+    if (selection_->intersects(_area))
         clearSelection();
 }
 
@@ -985,6 +1029,18 @@ void Terminal::synchronizedOutput(bool _enabled)
 
     refreshRenderBuffer(steady_clock::now(), true);
     eventListener_.screenUpdated();
+}
+
+void Terminal::onBufferScrolled(LineCount _n) noexcept
+{
+    if (!selection_)
+        return;
+
+    auto const top = -boxed_cast<LineOffset>(screen_.historyLineCount());
+    if (selection_->from().line > top && selection_->to().line > top)
+        selection_->applyScroll(boxed_cast<LineOffset>(_n), screen_.historyLineCount());
+    else
+        selection_.reset();
 }
 // }}}
 

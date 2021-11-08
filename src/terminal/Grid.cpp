@@ -346,7 +346,7 @@ int Grid<Cell>::computeLogicalLineNumberFromBottom(LineCount _n) const noexcept
 // }}}
 // {{{ Grid impl: scrolling
 template <typename Cell>
-void Grid<Cell>::scrollUp(LineCount _n, GraphicsAttributes _defaultAttributes) noexcept
+LineCount Grid<Cell>::scrollUp(LineCount _n, GraphicsAttributes _defaultAttributes) noexcept
 {
     verifyState();
     if (linesUsed_ == totalLineCount()) // with all grid lines in-use
@@ -357,12 +357,14 @@ void Grid<Cell>::scrollUp(LineCount _n, GraphicsAttributes _defaultAttributes) n
         // Initialize (/reset) new lines.
         for (auto y = boxed_cast<LineOffset>(pageSize_.lines - _n); y < boxed_cast<LineOffset>(pageSize_.lines); ++y)
             lineAt(y).reset(defaultLineFlags(), _defaultAttributes);
+
+        return _n;
     }
     else
     {
         // TODO: ensure explicit test for this case
         auto const linesAvailable = lines_.size() - unbox<size_t>(linesUsed_);
-        auto n = std::min(unbox<size_t>(_n), linesAvailable);
+        auto const n = std::min(unbox<size_t>(_n), linesAvailable);
         if (n != 0)
         {
             linesUsed_.value += n;
@@ -375,18 +377,19 @@ void Grid<Cell>::scrollUp(LineCount _n, GraphicsAttributes _defaultAttributes) n
         }
         if (n < unbox<size_t>(_n))
         {
-            n = unbox<size_t>(_n) - n;
-            linesUsed_ += LineCount::cast_from(n);
+            auto const incrementCount = unbox<size_t>(_n) - n;
+            linesUsed_ += LineCount::cast_from(incrementCount);
 
             // Initialize (/reset) new lines.
             for (auto y = boxed_cast<LineOffset>(pageSize_.lines - _n); y < boxed_cast<LineOffset>(pageSize_.lines); ++y)
                 lineAt(y).reset(defaultLineFlags(), _defaultAttributes);
         }
+        return LineCount::cast_from(n);
     }
 }
 
 template <typename Cell>
-void Grid<Cell>::scrollUp(LineCount _n, GraphicsAttributes _defaultAttributes, Margin _margin) noexcept
+LineCount Grid<Cell>::scrollUp(LineCount _n, GraphicsAttributes _defaultAttributes, Margin _margin) noexcept
 {
     verifyState();
     Expects(*_margin.horizontal.from >= 0 && *_margin.horizontal.to < *pageSize_.columns);
@@ -400,10 +403,7 @@ void Grid<Cell>::scrollUp(LineCount _n, GraphicsAttributes _defaultAttributes, M
     if (fullHorizontal)
     {
         if (fullVertical) // full-screen scroll-up
-        {
-            scrollUp(_n, _defaultAttributes);
-            return;
-        }
+            return scrollUp(_n, _defaultAttributes);
 
         // scroll up only inside vertical margin with full horizontal extend
         auto const marginHeight = LineCount(_margin.vertical.length());
@@ -452,6 +452,7 @@ void Grid<Cell>::scrollUp(LineCount _n, GraphicsAttributes _defaultAttributes, M
         }
     }
     verifyState();
+    return LineCount(0); // No full-margin lines scrolled up.
 }
 
 template <typename Cell>
@@ -524,6 +525,16 @@ void Grid<Cell>::scrollDown(LineCount v_n, GraphicsAttributes const& _defaultAtt
 }
 // }}}
 // {{{ Grid impl: resize
+template <typename Cell>
+void Grid<Cell>::reset()
+{
+    linesUsed_ = pageSize_.lines;
+    lines_.rotate_right(lines_.zero_index());
+    for (int i = 0; i < unbox<int>(pageSize_.lines); ++i)
+        lines_[i].reset(defaultLineFlags(), GraphicsAttributes{});
+    verifyState();
+}
+
 template <typename Cell>
 Coordinate Grid<Cell>::resize(PageSize _newSize, Coordinate _currentCursorPos, bool _wrapPending)
 {
@@ -784,7 +795,8 @@ Coordinate Grid<Cell>::resize(PageSize _newSize, Coordinate _currentCursorPos, b
                     {
                         Expects(previousFlags == line.inheritableFlags());
                         // Prepend previously wrapped columns into current line.
-                        line.prepend(wrappedColumns);
+                        auto& editable = line.editable();
+                        editable.insert(editable.begin(), wrappedColumns.begin(), wrappedColumns.end());
                     }
                     else
                     {

@@ -34,6 +34,9 @@ std::u32string Cell::codepoints() const
 
 std::string Cell::toUtf8() const
 {
+    if (!codepoint_)
+        return {};
+
     std::string text;
     text += unicode::convert_to<char>(codepoint_);
     if (extra_)

@@ -113,6 +113,7 @@ struct Cursor
     bool visible = true;
     GraphicsAttributes graphicsRendition{};
     CharsetMapping charsets{};
+    HyperlinkId hyperlink{};
     // TODO: selective erase attribute
     // TODO: SS2/SS3 states
     // TODO: CharacterSet for GL and GR
@@ -129,7 +130,8 @@ using ImageFragmentCache = crispy::LRUCache<ImageFragmentId, ImageFragment>;
  * allowing the object owner to control which part of the screen (or history)
  * to be viewn.
  */
-class Screen : public capabilities::StaticDatabase {
+template <typename EventListener>
+class Screen: public capabilities::StaticDatabase {
   public:
     /**
      * Initializes the screen with the given screen size and callbaks.
@@ -141,7 +143,7 @@ class Screen : public capabilities::StaticDatabase {
      * @param _maxHistoryLineCount number of lines the history must not exceed.
      */
     Screen(PageSize _size,
-           ScreenEvents& _eventListener,
+           EventListener& _eventListener,
            bool _logRaw = false,
            bool _logTrace = false,
            LineCount _maxHistoryLineCount = LineCount(0),
@@ -230,10 +232,8 @@ class Screen : public capabilities::StaticDatabase {
     void insertLines(LineCount _n);      // IL
     void insertColumns(ColumnCount _n);    // DECIC
 
-    void copyArea(
-        int _top, int _left, int _bottom, int _right, int _page,
-        int _targetTop, int _targetLeft, int _targetPage
-    );
+    void copyArea(Rect sourceArea, int page,
+                  Coordinate targetTopLeft, int targetPage);
 
     void eraseArea(int _top, int _left, int _bottom, int _right);
 
@@ -422,8 +422,8 @@ class Screen : public capabilities::StaticDatabase {
     Coordinate clampToOrigin(Coordinate coord) const noexcept
     {
         return {
-            std::clamp(coord.line, LineOffset{0}, margin_.vertical.length().as<LineOffset>() - LineOffset(1)),
-            std::clamp(coord.column, ColumnOffset{0}, margin_.horizontal.length().as<ColumnOffset>() - ColumnOffset(1))
+            std::clamp(coord.line, LineOffset{0}, margin_.vertical.length().template as<LineOffset>() - LineOffset(1)),
+            std::clamp(coord.column, ColumnOffset{0}, margin_.horizontal.length().template as<ColumnOffset>() - ColumnOffset(1))
         };
     }
 
@@ -502,7 +502,7 @@ class Screen : public capabilities::StaticDatabase {
     ///                            (0..-N) for savedLines area
     /// @return cursor position relative to screen origin (1, 1), that is, if line Number os >= 1, it's
     ///         in the screen area, and in the savedLines area otherwise.
-    std::optional<ScrollOffset> findMarkerDownwards(ScrollOffset _currentCursorLine) const;
+    std::optional<LineOffset> findMarkerDownwards(LineOffset _currentCursorLine) const;
 
     /// Finds the previous marker right next to the given line position.
     ///
@@ -510,15 +510,15 @@ class Screen : public capabilities::StaticDatabase {
     ///                            (0..-N) for savedLines area
     /// @return cursor position relative to screen origin (1, 1), that is, if line Number os >= 1, it's
     ///         in the screen area, and in the savedLines area otherwise.
-    std::optional<ScrollOffset> findMarkerUpwards(ScrollOffset _currentCursorLine) const;
+    std::optional<LineOffset> findMarkerUpwards(LineOffset _currentCursorLine) const;
 
     /// ScreenBuffer's type, such as main screen or alternate screen.
     ScreenType bufferType() const noexcept { return screenType_; }
 
     bool synchronizeOutput() const noexcept { return false; } // TODO
 
-    ScreenEvents& eventListener() noexcept { return eventListener_; }
-    ScreenEvents const& eventListener()  const noexcept { return eventListener_; }
+    EventListener& eventListener() noexcept { return eventListener_; }
+    EventListener const& eventListener()  const noexcept { return eventListener_; }
 
     void setWindowTitle(std::string const& _title);
     void saveWindowTitle();
@@ -590,6 +590,7 @@ class Screen : public capabilities::StaticDatabase {
 
     void fail(std::string const& _message) const;
 
+    void scrollUp(LineCount n, GraphicsAttributes sgr, Margin margin);
     void scrollUp(LineCount n, Margin margin);
     void scrollDown(LineCount n, Margin margin);
     void insertChars(LineOffset _lineNo, ColumnCount _n);
@@ -600,7 +601,7 @@ class Screen : public capabilities::StaticDatabase {
 
     // private fields
     //
-    ScreenEvents& eventListener_;
+    EventListener& eventListener_;
 
     bool logRaw_ = false;
     bool logTrace_ = false;
@@ -624,8 +625,8 @@ class Screen : public capabilities::StaticDatabase {
     ImageFragmentCache imageFragments_;
     ImageFragmentId nextImageFragmentId_ = ImageFragmentId(1);
 
-    Sequencer sequencer_;
-    parser::Parser<Sequencer> parser_;
+    Sequencer<EventListener> sequencer_;
+    parser::Parser<Sequencer<EventListener>> parser_;
     int64_t instructionCounter_ = 0;
 
     PageSize pageSize_;
@@ -667,11 +668,21 @@ class Screen : public capabilities::StaticDatabase {
     //
 
     HyperlinkStorage hyperlinks_{};
-    HyperlinkId currentHyperlink_ = {}; // TODO(pr): should go into cursor maybe?
 
     // experimental features
     //
     bool respondToTCapQuery_ = true;
+};
+
+class MockTerm: public MockScreenEvents
+{
+public:
+    explicit MockTerm(PageSize _size, LineCount _hist = {}):
+        screen(_size, *this, false, false, _hist)
+    {
+    }
+
+    Screen<MockTerm> screen;
 };
 
 }  // namespace terminal

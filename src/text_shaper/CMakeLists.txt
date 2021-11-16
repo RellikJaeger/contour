@@ -11,6 +11,9 @@ if("${CMAKE_SYSTEM}" MATCHES "Windows")
     list(APPEND text_shaper_SRC directwrite_locator.cpp directwrite_locator.h)
     list(APPEND text_shaper_SRC directwrite_shaper.cpp directwrite_shaper.h)
 endif()
+if(APPLE)
+    list(APPEND text_shaper_SRC coretext_locator.h coretext_locator.m)
+endif()
 
 # TODO: coretext_shaper.cpp coretext_shaper.h
 add_library(text_shaper STATIC ${text_shaper_SRC})
@@ -21,6 +24,8 @@ list(APPEND TEXT_SHAPER_LIBS range-v3)
 list(APPEND TEXT_SHAPER_LIBS GSL)
 
 if(APPLE)
+    list(APPEND TEXT_SHAPER_LIBS "-framework Foundation")
+    enable_language(OBJCXX)
     find_package(PkgConfig REQUIRED)
     find_package(Fontconfig REQUIRED)
     if(CONTOUR_BUILD_WITH_EMBEDDED_FT_HB)

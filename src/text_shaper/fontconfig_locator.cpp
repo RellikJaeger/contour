@@ -19,6 +19,7 @@
 #include <fontconfig/fontconfig.h>
 
 #include <string_view>
+#include <text_shaper/coretext_locator.h>
 
 using std::nullopt;
 using std::optional;
@@ -141,6 +142,7 @@ struct fontconfig_locator::Private
 fontconfig_locator::fontconfig_locator():
     d{new Private(), [](Private* p) { delete p; }}
 {
+    test();
     FcInit();
 }
 
